@@ -7,11 +7,46 @@ namespace CS2SP;
 
 public static class Players
 {
-    public static bool IsValid(CCSPlayerController? p) =>
-        p is { IsValid: true } && !p.IsHLTV;
+    public static bool IsValid(CCSPlayerController? p)
+    {
+        if (p is null)
+            return false;
+        try
+        {
+            return p.IsValid && !p.IsHLTV;
+        }
+        catch (NativeException)
+        {
+            return false;
+        }
+    }
 
     public static bool IsHuman(CCSPlayerController? p) =>
         IsValid(p) && !p!.IsBot;
+
+    public static CCSPlayerController? FromSlot(int slot)
+    {
+        try
+        {
+            return Utilities.GetPlayerFromSlot(slot);
+        }
+        catch (NativeException)
+        {
+            return null;
+        }
+    }
+
+    public static CCSPlayerController? FromUserid(int userid)
+    {
+        try
+        {
+            return Utilities.GetPlayerFromUserid(userid);
+        }
+        catch (NativeException)
+        {
+            return null;
+        }
+    }
 
     public static ulong SteamId64(CCSPlayerController player)
     {
@@ -26,16 +61,33 @@ public static class Players
     /// </summary>
     public static int PawnTeamNum(CCSPlayerController player)
     {
-        var pawn = player.PlayerPawn?.Value;
-        if (pawn is { IsValid: true })
-            return pawn.TeamNum;
+        try
+        {
+            var pawn = player.PlayerPawn?.Value;
+            if (pawn is { IsValid: true })
+                return pawn.TeamNum;
+        }
+        catch (NativeException)
+        {
+        }
+
         return 0;
     }
 
     public static CsTeam ControllerTeam(CCSPlayerController player) => player.Team;
 
-    public static CCSGameRules? GameRules() =>
-        Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules").FirstOrDefault()?.GameRules;
+    public static CCSGameRules? GameRules()
+    {
+        try
+        {
+            return Utilities.FindAllEntitiesByDesignerName<CCSGameRulesProxy>("cs_gamerules")
+                .FirstOrDefault()?.GameRules;
+        }
+        catch (NativeException)
+        {
+            return null;
+        }
+    }
 }
 
 public static class EngineCvars

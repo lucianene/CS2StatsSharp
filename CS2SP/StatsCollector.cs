@@ -41,14 +41,14 @@ public sealed class StatsCollector
         _healthMap.Clear();
         Clock.Reset();
         Store.Clear();
-        SeedConnectedPlayers();
+        Server.NextWorldUpdate(SeedConnectedPlayers);
     }
 
     public void SeedConnectedPlayers()
     {
         for (var i = 0; i < PlayerStatsStore.MaxPlayers; i++)
         {
-            var p = Utilities.GetPlayerFromSlot(i);
+            var p = Players.FromSlot(i);
             if (!Players.IsValid(p))
                 continue;
             var stats = Store.Replace(i, p!.IsBot);
@@ -60,7 +60,7 @@ public sealed class StatsCollector
     {
         if ((uint)slot >= PlayerStatsStore.MaxPlayers)
             return;
-        var p = Utilities.GetPlayerFromSlot(slot);
+        var p = Players.FromSlot(slot);
         var isBot = p is { IsValid: true } && (p.IsBot || p.IsHLTV);
         var stats = Store.Replace(slot, isBot);
         if (p is { IsValid: true })
@@ -71,7 +71,7 @@ public sealed class StatsCollector
     {
         if ((uint)slot >= PlayerStatsStore.MaxPlayers)
             return;
-        var p = Utilities.GetPlayerFromSlot(slot);
+        var p = Players.FromSlot(slot);
         if (!Players.IsValid(p))
             return;
         var stats = Store.Get(slot) ?? Store.Replace(slot, p!.IsBot);
@@ -164,7 +164,7 @@ public sealed class StatsCollector
         var aliveTeammates = 0;
         for (var j = 0; j < PlayerStatsStore.MaxPlayers; j++)
         {
-            var other = Utilities.GetPlayerFromSlot(j);
+            var other = Players.FromSlot(j);
             if (!Players.IsValid(other) || other!.Slot == attacker.Slot)
                 continue;
             if (Players.ControllerTeam(other) != killerTeam)
@@ -315,7 +315,7 @@ public sealed class StatsCollector
             return;
         if (!string.Equals(ev.Othertype, "CChicken", StringComparison.Ordinal))
             return;
-        var attacker = Utilities.GetPlayerFromUserid(ev.Attacker);
+        var attacker = Players.FromUserid(ev.Attacker);
         if (!Players.IsHuman(attacker))
             return;
         Store.GetOrCreate(attacker!.Slot).ChickenKills++;
@@ -397,7 +397,7 @@ public sealed class StatsCollector
         var uploads = new List<PlayerUpload>();
         for (var i = 0; i < PlayerStatsStore.MaxPlayers; i++)
         {
-            var p = Utilities.GetPlayerFromSlot(i);
+            var p = Players.FromSlot(i);
             if (!Players.IsHuman(p))
                 continue;
 

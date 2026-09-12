@@ -1,4 +1,3 @@
-using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Entities;
@@ -29,7 +28,7 @@ public sealed partial class CS2SPPlugin : BasePlugin
         RegisterListener<Listeners.OnClientDisconnect>(slot => Stats.OnClientDisconnect(slot));
         RegisterListener<Listeners.OnClientAuthorized>((slot, steamId) =>
         {
-            var player = Utilities.GetPlayerFromSlot(slot);
+            var player = Players.FromSlot(slot);
             if (!Players.IsValid(player))
                 return;
             var stats = Stats.Store.Get(slot) ?? Stats.Store.Replace(slot, player!.IsBot);
@@ -38,7 +37,8 @@ public sealed partial class CS2SPPlugin : BasePlugin
         });
 
         Stats.Start();
-        Stats.SeedConnectedPlayers();
+        // Do not walk slots here: Utilities.GetPlayerFromSlot throws
+        // NativeException ("Entity system yet is not initialized") and CSS unloads us.
 
         Logger.LogInformation("[CS2SP] CS2StatsPlugin loaded (v{Version}).", ModuleVersion);
     }
