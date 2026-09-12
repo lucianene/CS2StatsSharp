@@ -34,16 +34,7 @@ game/csgo/addons/counterstrikesharp/plugins/CS2SP/CS2SP.dll
 game/csgo/addons/counterstrikesharp/plugins/CS2SP/CS2SP.Logic.dll
 ```
 
-`make setup` / `make plugins` on **cs2aim**, **cs2dm**, **cs2zm**, and **cs2casual** compile this plugin into that mod's `addons`. **cs2mm** does not — stats are built into CS2MM.
-
-On a PlayCup game box, from `game-servers/cs2mm/CS2StatsSharp/`:
-
-```bash
-make cr                              # publish into ../addons (cs2mm) and stash cs2sp.vdf
-make copy-addons ADDONS_DIR=../../cs2dm/addons
-```
-
-`../scripts/cs2sp-select.sh css|cpp` keeps exactly one implementation loaded.
+`make setup` / `make plugins` on **cs2aim**, **cs2dm**, **cs2zm**, and **cs2casual** fetch the GitHub `latest` prerelease into that mod's `addons`. **cs2mm** does not — stats are built into CS2MM.
 
 ## Runtime
 
