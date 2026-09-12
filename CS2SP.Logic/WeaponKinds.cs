@@ -12,13 +12,42 @@ public static class WeaponKinds
         "awp", "ssg08", "scar20", "g3sg1"
     };
 
-    public static bool IsPistol(string? weapon) => weapon is not null && Pistols.Contains(weapon);
-    public static bool IsSniper(string? weapon) => weapon is not null && Snipers.Contains(weapon);
-    public static bool IsBombKill(string? weapon) => weapon == "planted_c4";
+    /// <summary>
+    /// CS2 events usually omit the <c>weapon_</c> prefix; CSS sometimes leaves it on.
+    /// Aliases match the scoreboard names the C++ tables used.
+    /// </summary>
+    public static string Normalize(string? weapon)
+    {
+        if (string.IsNullOrWhiteSpace(weapon))
+            return "";
 
-    public static bool IsDelayedUtility(string? weapon) =>
-        weapon is "hegrenade" or "inferno" or "molotov";
+        var s = weapon.Trim();
+        if (s.StartsWith("weapon_", StringComparison.OrdinalIgnoreCase))
+            s = s[7..];
+        s = s.ToLowerInvariant();
+        return s switch
+        {
+            "hkp2000" => "p2000",
+            "usp" => "usp_silencer",
+            "incgrenade" => "inferno",
+            _ => s
+        };
+    }
+
+    public static bool IsPistol(string? weapon) => Pistols.Contains(Normalize(weapon));
+    public static bool IsSniper(string? weapon) => Snipers.Contains(Normalize(weapon));
+    public static bool IsBombKill(string? weapon) => Normalize(weapon) == "planted_c4";
+
+    public static bool IsDelayedUtility(string? weapon)
+    {
+        var w = Normalize(weapon);
+        return w is "hegrenade" or "inferno" or "molotov";
+    }
 
     public static bool IsUtility(string? weapon) => IsDelayedUtility(weapon);
-    public static bool IsFire(string? weapon) => weapon is "inferno" or "molotov";
+    public static bool IsFire(string? weapon)
+    {
+        var w = Normalize(weapon);
+        return w is "inferno" or "molotov";
+    }
 }

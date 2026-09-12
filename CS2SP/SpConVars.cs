@@ -2,6 +2,7 @@ using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Cvars;
 using CounterStrikeSharp.API.Modules.Cvars.Validators;
+using CS2SP.Logic;
 
 namespace CS2SP;
 
@@ -16,6 +17,12 @@ public sealed class SpConVars
     public readonly FakeConVar<string> Mod = new("sp_mod", "Mod type driving stat behavior: matchmaking, deathmatch, retake, aim, zombie, …", "matchmaking");
     public readonly FakeConVar<string> ServerId = new("sp_server_id", "This server's identifier (game_servers.container_name) so the API buckets stats to the right server.", "");
     public readonly FakeConVar<float> DmInterval = new("sp_dm_upload_interval", "Seconds between periodic stats uploads", 30.0f, ConVarFlags.FCVAR_NONE, new RangeValidator<float>(1f, 86400f));
+
+    public string MatchIdText => CvarText.Clean(MatchId.Value);
+    public string ApiAddressText => CvarText.Clean(ApiAddress.Value);
+    public string GameModeText => CvarText.Clean(GameMode.Value);
+    public string ModText => CvarText.Clean(Mod.Value);
+    public string ServerIdText => CvarText.CleanHeader(ServerId.Value);
 
     public void Register(BasePlugin plugin) => plugin.RegisterFakeConVars(this);
 }

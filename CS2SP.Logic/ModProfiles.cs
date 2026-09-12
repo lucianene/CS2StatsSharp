@@ -29,7 +29,8 @@ public static class ModProfiles
 
     public static ModProfile Resolve(string? name)
     {
-        if (!string.IsNullOrWhiteSpace(name))
+        name = CvarText.Clean(name);
+        if (name.Length > 0)
         {
             foreach (var p in All)
             {

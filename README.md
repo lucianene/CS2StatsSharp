@@ -51,4 +51,6 @@ game/csgo/addons/counterstrikesharp/plugins/CS2SP/CS2SP.Logic.dll
 
 `sp_send_stats` (server / RCON) forces an upload regardless of timer / round timing.
 
+String FakeConVars (`sp_mod`, `sp_game_mode`, `sp_api_round_address`, `sp_server_id`, `sp_match_id`) must have **nothing after the closing quote** on the cfg line. A trailing `// comment` is stored as part of the value and breaks the POST URL.
+
 Unknown `sp_mod` values fall back to matchmaking. `aim` is team scoring with respawn (`resetStateOnSpawn`); it is not FFA. Add a row in `CS2SP.Logic/ModProfiles.cs` for a new mode — handlers only read the flags.

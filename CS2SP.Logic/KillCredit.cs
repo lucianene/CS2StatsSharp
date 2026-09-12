@@ -4,7 +4,8 @@ public enum KillOutcome
 {
     Skip,
     TeamKill,
-    Kill
+    Kill,
+    Suicide
 }
 
 public static class KillCredit
@@ -31,8 +32,16 @@ public static class KillCredit
         return blindDuration > 0f;
     }
 
-    public static KillOutcome ClassifyDeath(bool killerDeadThisRound, bool sameTeam, bool freeForAll)
+    public static KillOutcome ClassifyDeath(
+        bool killerDeadThisRound,
+        bool sameTeam,
+        bool freeForAll,
+        bool suicide = false)
     {
+        // Suicide is not a team kill (C++ buckets it as TK via same-team). Count
+        // the death so DeadThisRound / clutch stay honest.
+        if (suicide)
+            return KillOutcome.Suicide;
         if (killerDeadThisRound)
             return KillOutcome.Skip;
         if (!freeForAll && sameTeam)

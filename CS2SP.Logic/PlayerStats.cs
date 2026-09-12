@@ -4,7 +4,9 @@ public sealed class PlayerStats
 {
     public int Slot;
     public ulong SteamId;
+    public string Name = "";
     public bool IsBot;
+    public bool Disconnected;
 
     public int Kills;
     public int Deaths;
@@ -85,7 +87,7 @@ public sealed class PlayerStatsStore
     public PlayerStats GetOrCreate(int slot, bool isBot = false)
     {
         if ((uint)slot >= MaxPlayers)
-            throw new ArgumentOutOfRangeException(nameof(slot));
+            return new PlayerStats { Slot = slot, IsBot = isBot };
         return _slots[slot] ??= new PlayerStats { Slot = slot, IsBot = isBot };
     }
 

@@ -1,6 +1,6 @@
+using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
-using CounterStrikeSharp.API.Modules.Entities;
 using Microsoft.Extensions.Logging;
 
 namespace CS2SP;
@@ -22,103 +22,91 @@ public sealed partial class CS2SPPlugin : BasePlugin
         Api = new PlaycupApiClient(Logger);
         Stats = new StatsCollector(this, Cvars, Api, Logger);
 
-        RegisterListener<Listeners.OnMapStart>(_ => Stats.OnMapStart());
-        RegisterListener<Listeners.OnClientConnected>(slot => Stats.OnClientConnected(slot));
-        RegisterListener<Listeners.OnClientPutInServer>(slot => Stats.OnClientPutInServer(slot));
-        RegisterListener<Listeners.OnClientDisconnect>(slot => Stats.OnClientDisconnect(slot));
+        RegisterListener<Listeners.OnMapStart>(_ => SafeRun("OnMapStart", Stats.OnMapStart));
+        RegisterListener<Listeners.OnMapEnd>(() => SafeRun("OnMapEnd", Stats.OnMapEnd));
+        RegisterListener<Listeners.OnClientConnected>(slot => SafeRun("OnClientConnected", () => Stats.OnClientConnected(slot)));
+        RegisterListener<Listeners.OnClientPutInServer>(slot => SafeRun("OnClientPutInServer", () => Stats.OnClientPutInServer(slot)));
+        RegisterListener<Listeners.OnClientDisconnect>(slot => SafeRun("OnClientDisconnect", () => Stats.OnClientDisconnect(slot)));
         RegisterListener<Listeners.OnClientAuthorized>((slot, steamId) =>
-        {
-            var player = Players.FromSlot(slot);
-            if (!Players.IsValid(player))
-                return;
-            var stats = Stats.Store.Get(slot) ?? Stats.Store.Replace(slot, player!.IsBot);
-            if (steamId.SteamId64 != 0)
-                stats.SteamId = steamId.SteamId64;
-        });
+            SafeRun("OnClientAuthorized", () => Stats.OnClientAuthorized(slot, steamId.SteamId64)));
 
         Stats.Start();
         // Do not walk slots here: Utilities.GetPlayerFromSlot throws
         // NativeException ("Entity system yet is not initialized") and CSS unloads us.
+        // Seed on the next world tick (late load / hot reload) and again on OnMapStart.
+        Server.NextWorldUpdate(Stats.TrySeedWorld);
 
         Logger.LogInformation("[CS2SP] CS2StatsPlugin loaded (v{Version}).", ModuleVersion);
     }
 
-    public override void Unload(bool hotReload) => Api.Dispose();
-
-    [GameEventHandler]
-    public HookResult OnRoundStart(EventRoundStart _, GameEventInfo _info)
+    public override void Unload(bool hotReload)
     {
-        Stats.OnRoundStart();
+        Stats.Stop();
+        Api.Dispose();
+    }
+
+    private void SafeRun(string name, Action body)
+    {
+        try
+        {
+            body();
+        }
+        catch (NativeException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[CS2SP] {Event} failed", name);
+        }
+    }
+
+    private HookResult Safe(string name, Action body)
+    {
+        SafeRun(name, body);
         return HookResult.Continue;
     }
 
     [GameEventHandler]
-    public HookResult OnRoundEnd(EventRoundEnd ev, GameEventInfo _info)
-    {
-        Stats.OnRoundEnd(ev);
-        return HookResult.Continue;
-    }
+    public HookResult OnRoundStart(EventRoundStart _, GameEventInfo _info) =>
+        Safe("round_start", Stats.OnRoundStart);
 
     [GameEventHandler]
-    public HookResult OnPlayerSpawn(EventPlayerSpawn ev, GameEventInfo _info)
-    {
-        Stats.OnPlayerSpawn(ev.Userid);
-        return HookResult.Continue;
-    }
+    public HookResult OnRoundEnd(EventRoundEnd ev, GameEventInfo _info) =>
+        Safe("round_end", () => Stats.OnRoundEnd(ev));
 
     [GameEventHandler]
-    public HookResult OnPlayerDeath(EventPlayerDeath ev, GameEventInfo _info)
-    {
-        Stats.OnPlayerDeath(ev);
-        return HookResult.Continue;
-    }
+    public HookResult OnPlayerSpawn(EventPlayerSpawn ev, GameEventInfo _info) =>
+        Safe("player_spawn", () => Stats.OnPlayerSpawn(ev.Userid));
 
     [GameEventHandler]
-    public HookResult OnPlayerHurt(EventPlayerHurt ev, GameEventInfo _info)
-    {
-        Stats.OnPlayerHurt(ev);
-        return HookResult.Continue;
-    }
+    public HookResult OnPlayerDeath(EventPlayerDeath ev, GameEventInfo _info) =>
+        Safe("player_death", () => Stats.OnPlayerDeath(ev));
 
     [GameEventHandler]
-    public HookResult OnRoundMvp(EventRoundMvp ev, GameEventInfo _info)
-    {
-        Stats.OnRoundMvp(ev.Userid);
-        return HookResult.Continue;
-    }
+    public HookResult OnPlayerHurt(EventPlayerHurt ev, GameEventInfo _info) =>
+        Safe("player_hurt", () => Stats.OnPlayerHurt(ev));
 
     [GameEventHandler]
-    public HookResult OnBombPlanted(EventBombPlanted ev, GameEventInfo _info)
-    {
-        Stats.OnBomb("bomb_planted", ev.Userid);
-        return HookResult.Continue;
-    }
+    public HookResult OnRoundMvp(EventRoundMvp ev, GameEventInfo _info) =>
+        Safe("round_mvp", () => Stats.OnRoundMvp(ev.Userid));
 
     [GameEventHandler]
-    public HookResult OnBombDefused(EventBombDefused ev, GameEventInfo _info)
-    {
-        Stats.OnBomb("bomb_defused", ev.Userid);
-        return HookResult.Continue;
-    }
+    public HookResult OnBombPlanted(EventBombPlanted ev, GameEventInfo _info) =>
+        Safe("bomb_planted", () => Stats.OnBomb("bomb_planted", ev.Userid));
 
     [GameEventHandler]
-    public HookResult OnBombExploded(EventBombExploded ev, GameEventInfo _info)
-    {
-        Stats.OnBomb("bomb_exploded", ev.Userid);
-        return HookResult.Continue;
-    }
+    public HookResult OnBombDefused(EventBombDefused ev, GameEventInfo _info) =>
+        Safe("bomb_defused", () => Stats.OnBomb("bomb_defused", ev.Userid));
 
     [GameEventHandler]
-    public HookResult OnPlayerBlind(EventPlayerBlind ev, GameEventInfo _info)
-    {
-        Stats.OnPlayerBlind(ev);
-        return HookResult.Continue;
-    }
+    public HookResult OnBombExploded(EventBombExploded ev, GameEventInfo _info) =>
+        Safe("bomb_exploded", () => Stats.OnBomb("bomb_exploded", ev.Userid));
 
     [GameEventHandler]
-    public HookResult OnOtherDeath(EventOtherDeath ev, GameEventInfo _info)
-    {
-        Stats.OnChickenDeath(ev);
-        return HookResult.Continue;
-    }
+    public HookResult OnPlayerBlind(EventPlayerBlind ev, GameEventInfo _info) =>
+        Safe("player_blind", () => Stats.OnPlayerBlind(ev));
+
+    [GameEventHandler]
+    public HookResult OnOtherDeath(EventOtherDeath ev, GameEventInfo _info) =>
+        Safe("other_death", () => Stats.OnChickenDeath(ev));
 }

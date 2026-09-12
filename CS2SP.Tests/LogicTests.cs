@@ -15,6 +15,13 @@ public class ModProfilesTests
         Assert.Equal(ModProfiles.Matchmaking, ModProfiles.Resolve("zombie"));
     }
 
+    [Fact]
+    public void Quoted_and_padded_cfg_values_still_resolve()
+    {
+        Assert.Equal(ModProfiles.Aim, ModProfiles.Resolve("\"aim\"                           "));
+        Assert.Equal(ModProfiles.Deathmatch, ModProfiles.Resolve("\"deathmatch\"                           // comment"));
+    }
+
     [Theory]
     [InlineData("matchmaking")]
     [InlineData("MATCHMAKING")]
@@ -79,6 +86,13 @@ public class WeaponKindsTests
         Assert.False(WeaponKinds.IsFire("hegrenade"));
         Assert.True(WeaponKinds.IsBombKill("planted_c4"));
         Assert.False(WeaponKinds.IsDelayedUtility("ak47"));
+        Assert.True(WeaponKinds.IsPistol("weapon_deagle"));
+        Assert.True(WeaponKinds.IsPistol("hkp2000"));
+        Assert.True(WeaponKinds.IsSniper("weapon_awp"));
+        Assert.True(WeaponKinds.IsDelayedUtility("incgrenade"));
+        Assert.True(WeaponKinds.IsFire("incgrenade"));
+        Assert.True(WeaponKinds.IsBombKill("weapon_planted_c4"));
+        Assert.Equal("p2000", WeaponKinds.Normalize("weapon_hkp2000"));
     }
 }
 
@@ -124,6 +138,8 @@ public class KillCreditTests
         Assert.Equal(KillOutcome.TeamKill, KillCredit.ClassifyDeath(false, sameTeam: true, freeForAll: false));
         Assert.Equal(KillOutcome.Kill, KillCredit.ClassifyDeath(false, sameTeam: true, freeForAll: true));
         Assert.Equal(KillOutcome.Kill, KillCredit.ClassifyDeath(false, sameTeam: false, freeForAll: false));
+        Assert.Equal(KillOutcome.Suicide, KillCredit.ClassifyDeath(false, sameTeam: true, freeForAll: false, suicide: true));
+        Assert.Equal(KillOutcome.Suicide, KillCredit.ClassifyDeath(killerDeadThisRound: true, sameTeam: true, freeForAll: false, suicide: true));
     }
 
     [Fact]
@@ -183,6 +199,10 @@ public class PlayerStatsStoreTests
         Assert.Empty(a.RoundGivenDamage);
         store.Remove(1);
         Assert.Null(store.Get(1));
+        var stray = store.GetOrCreate(99);
+        Assert.Null(store.Get(99));
+        stray.Kills = 1;
+        Assert.Null(store.Get(99));
     }
 
     [Fact]
@@ -296,6 +316,29 @@ public class StatsPayloadTests
     }
 }
 
+public class CvarTextTests
+{
+    [Theory]
+    [InlineData(null, "")]
+    [InlineData("", "")]
+    [InlineData("   ", "")]
+    [InlineData("aim", "aim")]
+    [InlineData("  aim  ", "aim")]
+    [InlineData("\"aim\"", "aim")]
+    [InlineData("\"aim\"                           ", "aim")]
+    [InlineData("\"aim\"                           // REQUIRED: comment", "aim")]
+    [InlineData("\"https://api.playcup.ro/v1/mod-stats/\"   ", "https://api.playcup.ro/v1/mod-stats/")]
+    public void Clean_strips_quotes_padding_and_trailing_cfg_comments(string? raw, string expected) =>
+        Assert.Equal(expected, CvarText.Clean(raw));
+
+    [Fact]
+    public void CleanHeader_drops_control_characters()
+    {
+        Assert.Equal("aim", CvarText.CleanHeader("\"aim\"\r\nX-Injected: 1"));
+        Assert.Equal("aim", CvarText.CleanHeader("aim\t"));
+    }
+}
+
 public class UploadUrlTests
 {
     [Fact]
@@ -323,6 +366,28 @@ public class UploadUrlTests
         Assert.Contains("match_id=a%20b", url);
         Assert.Contains("mod=death%20match", url);
         Assert.Contains("game_mode=a%26b", url);
+    }
+
+    [Fact]
+    public void Quoted_padded_cvars_build_a_valid_absolute_uri()
+    {
+        var url = UploadUrl.Build(
+            "\"https://api.playcup.ro/v1/mod-stats/\"   ",
+            "\"\"",
+            "\"aim\"                           ",
+            "\"aim\"               ");
+        Assert.Equal(
+            "https://api.playcup.ro/v1/mod-stats/?match_id=&mod=aim&game_mode=aim",
+            url);
+        Assert.True(Uri.TryCreate(url, UriKind.Absolute, out var uri));
+        Assert.Equal(Uri.UriSchemeHttps, uri.Scheme);
+    }
+
+    [Fact]
+    public void Existing_query_string_is_appended_with_ampersand()
+    {
+        var url = UploadUrl.Build("https://x/v1/mod-stats/?src=cfg", "", "aim", "aim");
+        Assert.Equal("https://x/v1/mod-stats/?src=cfg&match_id=&mod=aim&game_mode=aim", url);
     }
 }
 

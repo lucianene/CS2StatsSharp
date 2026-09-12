@@ -20,7 +20,7 @@ public sealed class PlaycupApiClient : IDisposable
     }
 
     public void Post(
-        string url,
+        Uri url,
         string jsonBody,
         string? serverId,
         Action<JsonNode?>? onSuccess = null,
@@ -36,39 +36,89 @@ public sealed class PlaycupApiClient : IDisposable
     }
 
     private async Task SendAsync(
-        string url,
+        Uri url,
         string jsonBody,
         string? serverId,
         Action<JsonNode?>? onSuccess,
         Action<int, string>? onError)
     {
+        Exception? last = null;
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            if (_disposed)
+            {
+                CompleteOnMain(onError, 0, "disposed");
+                return;
+            }
+
+            try
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Post, url);
+                if (!string.IsNullOrEmpty(serverId))
+                    req.Headers.TryAddWithoutValidation("X-Server-Id", serverId);
+                req.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+
+                using var resp = await _http.SendAsync(req).ConfigureAwait(false);
+                var text = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+                var code = (int)resp.StatusCode;
+                var ok = resp.IsSuccessStatusCode;
+                RunOnMain(() => Complete(ok, code, text, url.ToString(), onSuccess, onError));
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                CompleteOnMain(onError, 0, "disposed");
+                return;
+            }
+            catch (Exception ex) when (attempt == 0 && IsTransient(ex))
+            {
+                last = ex;
+                try { await Task.Delay(250).ConfigureAwait(false); }
+                catch { /* ignore */ }
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+                break;
+            }
+        }
+
+        _log.LogWarning(last, "[CS2SP] HTTP POST {Url} threw", url);
+        RunOnMain(() =>
+        {
+            if (_disposed)
+            {
+                onError?.Invoke(0, "disposed");
+                return;
+            }
+
+            onError?.Invoke(0, last?.Message ?? "http failed");
+        });
+    }
+
+    private void CompleteOnMain(Action<int, string>? onError, int code, string body) =>
+        RunOnMain(() =>
+        {
+            if (_disposed)
+            {
+                onError?.Invoke(0, "disposed");
+                return;
+            }
+
+            onError?.Invoke(code, body);
+        });
+
+    private void RunOnMain(Action action)
+    {
+        if (_disposed)
+            return;
         try
         {
-            using var req = new HttpRequestMessage(HttpMethod.Post, url);
-            if (!string.IsNullOrEmpty(serverId))
-                req.Headers.TryAddWithoutValidation("X-Server-Id", serverId);
-            req.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
-
-            using var resp = await _http.SendAsync(req).ConfigureAwait(false);
-            var text = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
-            var code = (int)resp.StatusCode;
-            var ok = resp.IsSuccessStatusCode;
-
-            Server.NextWorldUpdate(() => Complete(ok, code, text, url, onSuccess, onError));
+            Server.NextWorldUpdate(action);
         }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "[CS2SP] HTTP POST {Url} threw", url);
-            Server.NextWorldUpdate(() =>
-            {
-                if (_disposed)
-                {
-                    onError?.Invoke(0, "disposed");
-                    return;
-                }
-
-                onError?.Invoke(0, ex.Message);
-            });
+            _log.LogWarning(ex, "[CS2SP] NextWorldUpdate failed after HTTP");
         }
     }
 
@@ -102,6 +152,9 @@ public sealed class PlaycupApiClient : IDisposable
 
         onSuccess?.Invoke(node);
     }
+
+    private static bool IsTransient(Exception ex) =>
+        ex is HttpRequestException or TaskCanceledException or IOException;
 
     private static string Truncate(string s) => s.Length <= 500 ? s : s[..500];
 

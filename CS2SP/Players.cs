@@ -21,8 +21,44 @@ public static class Players
         }
     }
 
-    public static bool IsHuman(CCSPlayerController? p) =>
-        IsValid(p) && !p!.IsBot;
+    public static bool IsHuman(CCSPlayerController? p)
+    {
+        if (!IsValid(p))
+            return false;
+        try
+        {
+            return !p!.IsBot;
+        }
+        catch (NativeException)
+        {
+            return false;
+        }
+    }
+
+    public static string Name(CCSPlayerController player)
+    {
+        try
+        {
+            return player.PlayerName ?? "";
+        }
+        catch (NativeException)
+        {
+            return "";
+        }
+    }
+
+    /// <summary>Null if team cannot be read (entity system down).</summary>
+    public static bool? SameTeam(CCSPlayerController a, CCSPlayerController b)
+    {
+        try
+        {
+            return a.Team == b.Team;
+        }
+        catch (NativeException)
+        {
+            return null;
+        }
+    }
 
     public static CCSPlayerController? FromSlot(int slot)
     {
@@ -50,9 +86,16 @@ public static class Players
 
     public static ulong SteamId64(CCSPlayerController player)
     {
-        if (player.AuthorizedSteamID is { SteamId64: var auth } && auth != 0)
-            return auth;
-        return player.SteamID;
+        try
+        {
+            if (player.AuthorizedSteamID is { SteamId64: var auth } && auth != 0)
+                return auth;
+            return player.SteamID;
+        }
+        catch (NativeException)
+        {
+            return 0;
+        }
     }
 
     /// <summary>
@@ -74,7 +117,17 @@ public static class Players
         return 0;
     }
 
-    public static CsTeam ControllerTeam(CCSPlayerController player) => player.Team;
+    public static CsTeam ControllerTeam(CCSPlayerController player)
+    {
+        try
+        {
+            return player.Team;
+        }
+        catch (NativeException)
+        {
+            return CsTeam.None;
+        }
+    }
 
     public static CCSGameRules? GameRules()
     {
