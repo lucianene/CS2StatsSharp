@@ -27,6 +27,7 @@ public sealed partial class CS2SPPlugin : BasePlugin
         RegisterListener<Listeners.OnClientConnected>(slot => SafeRun("OnClientConnected", () => Stats.OnClientConnected(slot)));
         RegisterListener<Listeners.OnClientPutInServer>(slot => SafeRun("OnClientPutInServer", () => Stats.OnClientPutInServer(slot)));
         RegisterListener<Listeners.OnClientDisconnect>(slot => SafeRun("OnClientDisconnect", () => Stats.OnClientDisconnect(slot)));
+        RegisterListener<Listeners.OnClientDisconnectPost>(slot => SafeRun("OnClientDisconnectPost", () => Stats.OnClientDisconnectPost(slot)));
         RegisterListener<Listeners.OnClientAuthorized>((slot, steamId) =>
             SafeRun("OnClientAuthorized", () => Stats.OnClientAuthorized(slot, steamId.SteamId64)));
 
@@ -41,7 +42,7 @@ public sealed partial class CS2SPPlugin : BasePlugin
 
     public override void Unload(bool hotReload)
     {
-        Stats.Stop();
+        Stats.OnUnload();
         Api.Dispose();
     }
 
@@ -65,6 +66,10 @@ public sealed partial class CS2SPPlugin : BasePlugin
         SafeRun(name, body);
         return HookResult.Continue;
     }
+
+    [GameEventHandler]
+    public HookResult OnPlayerDisconnect(EventPlayerDisconnect ev, GameEventInfo _info) =>
+        Safe("player_disconnect", () => Stats.OnPlayerDisconnect(ev));
 
     [GameEventHandler]
     public HookResult OnRoundStart(EventRoundStart _, GameEventInfo _info) =>
@@ -109,4 +114,12 @@ public sealed partial class CS2SPPlugin : BasePlugin
     [GameEventHandler]
     public HookResult OnOtherDeath(EventOtherDeath ev, GameEventInfo _info) =>
         Safe("other_death", () => Stats.OnChickenDeath(ev));
+
+    [GameEventHandler]
+    public HookResult OnGrenadeThrown(EventGrenadeThrown ev, GameEventInfo _info) =>
+        Safe("grenade_thrown", () => Stats.OnGrenadeThrown(ev));
+
+    [GameEventHandler]
+    public HookResult OnHostageRescued(EventHostageRescued ev, GameEventInfo _info) =>
+        Safe("hostage_rescued", () => Stats.OnHostageRescued(ev.Userid));
 }

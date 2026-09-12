@@ -51,6 +51,20 @@ game/csgo/addons/counterstrikesharp/plugins/CS2SP/CS2SP.Logic.dll
 
 `sp_send_stats` (server / RCON) forces an upload regardless of timer / round timing.
 
+A player who leaves mid-map stays in later POSTs with the score they had when they exited (SteamID-keyed snapshot). That row is only cleared on map change, after a last POST on map end.
+
 String FakeConVars (`sp_mod`, `sp_game_mode`, `sp_api_round_address`, `sp_server_id`, `sp_match_id`) must have **nothing after the closing quote** on the cfg line. A trailing `// comment` is stored as part of the value and breaks the POST URL.
 
-Unknown `sp_mod` values fall back to matchmaking. `aim` is team scoring with respawn (`resetStateOnSpawn`); it is not FFA. Add a row in `CS2SP.Logic/ModProfiles.cs` for a new mode — handlers only read the flags.
+Unknown `sp_mod` values fall back to matchmaking. PlayCup `sp_mod` values: `deathmatch`, `aim`, `casual`, `zombie`. `aim` is team scoring with respawn (`resetStateOnSpawn`); it is not FFA. Add a row in `CS2SP.Logic/ModProfiles.cs` for a new mode — handlers only read the flags.
+
+## Stats captured
+
+Core scoreboard (events + engine MatchStats, never shrunk on disconnect): K/D/A, damage, hits, HS%, ADR, MVPs, team kills, money.
+
+Kill flavor (`player_death`): first/clutch, 2/3/4/5k, pistol/rifle/smg/shotgun/sniper/knife/zeus/HE/molotov/bomb, noscope, wallbang, through-smoke, air, blind, unique victims, chicken, longest distance (m), dominations, revenges, team wipes.
+
+Utility: flash/HE/smoke/molotov/decoy thrown, flash assists, enemies flashed, utility/fire damage, dinks. Casual hostage maps: rescues.
+
+Accuracy: `shots_on_target / shots_fired` from MatchStats (not `weapon_fire`).
+
+New keys need a `mod_player_stats` column + `ModPlayerStats` fillable. Do **not** add them to `match_player_stats` unless CS2MM also sends them.

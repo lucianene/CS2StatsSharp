@@ -11,8 +11,8 @@ public class ModProfilesTests
     {
         Assert.Equal(ModProfiles.Matchmaking, ModProfiles.Resolve(null));
         Assert.Equal(ModProfiles.Matchmaking, ModProfiles.Resolve(""));
-        Assert.Equal(ModProfiles.Matchmaking, ModProfiles.Resolve("retake"));
-        Assert.Equal(ModProfiles.Matchmaking, ModProfiles.Resolve("zombie"));
+        Assert.Equal(ModProfiles.Matchmaking, ModProfiles.Resolve("foobar"));
+        Assert.Equal(ModProfiles.Matchmaking, ModProfiles.Resolve("retake-plus"));
     }
 
     [Fact]
@@ -29,6 +29,9 @@ public class ModProfilesTests
     [InlineData("deathmatch")]
     [InlineData("aim")]
     [InlineData("AIM")]
+    [InlineData("casual")]
+    [InlineData("zombie")]
+    [InlineData("retake")]
     public void Resolve_is_case_insensitive(string name)
     {
         var p = ModProfiles.Resolve(name);
@@ -57,6 +60,30 @@ public class ModProfilesTests
         var aim = ModProfiles.Resolve("aim");
         Assert.False(aim.FreeForAll);
         Assert.True(aim.ResetStateOnSpawn);
+    }
+
+    [Fact]
+    public void Casual_is_round_based_like_matchmaking()
+    {
+        var casual = ModProfiles.Resolve("casual");
+        Assert.Equal("casual", casual.Name);
+        Assert.False(casual.FreeForAll);
+        Assert.False(casual.ResetStateOnSpawn);
+    }
+
+    [Fact]
+    public void Zombie_is_team_scoring_with_respawn()
+    {
+        var zm = ModProfiles.Resolve("zombie");
+        Assert.False(zm.FreeForAll);
+        Assert.True(zm.ResetStateOnSpawn);
+    }
+
+    [Fact]
+    public void Quoted_casual_and_zombie_cfg_values_still_resolve()
+    {
+        Assert.Equal(ModProfiles.Casual, ModProfiles.Resolve("\"casual\"                           "));
+        Assert.Equal(ModProfiles.Zombie, ModProfiles.Resolve("\"zombie\"                           // comment"));
     }
 }
 
@@ -92,7 +119,70 @@ public class WeaponKindsTests
         Assert.True(WeaponKinds.IsDelayedUtility("incgrenade"));
         Assert.True(WeaponKinds.IsFire("incgrenade"));
         Assert.True(WeaponKinds.IsBombKill("weapon_planted_c4"));
+        Assert.True(WeaponKinds.IsRifle("ak47"));
+        Assert.True(WeaponKinds.IsRifle("weapon_m4a1_silencer"));
+        Assert.True(WeaponKinds.IsSmg("mp9"));
+        Assert.True(WeaponKinds.IsShotgun("xm1014"));
+        Assert.True(WeaponKinds.IsKnife("knife"));
+        Assert.True(WeaponKinds.IsKnife("weapon_knife_t"));
+        Assert.True(WeaponKinds.IsZeus("taser"));
+        Assert.True(WeaponKinds.IsHe("hegrenade"));
+        var thrown = new PlayerStats();
+        WeaponKinds.CountThrow(thrown, "weapon_flashbang");
+        WeaponKinds.CountThrow(thrown, "hegrenade");
+        WeaponKinds.CountThrow(thrown, "smokegrenade");
+        WeaponKinds.CountThrow(thrown, "molotov");
+        WeaponKinds.CountThrow(thrown, "decoy");
+        Assert.Equal(1, thrown.FlashThrown);
+        Assert.Equal(1, thrown.HeThrown);
+        Assert.Equal(1, thrown.SmokeThrown);
+        Assert.Equal(1, thrown.MolotovThrown);
+        Assert.Equal(1, thrown.DecoyThrown);
         Assert.Equal("p2000", WeaponKinds.Normalize("weapon_hkp2000"));
+    }
+}
+
+public class KillFlavorTests
+{
+    [Fact]
+    public void Death_flags_and_weapon_classes()
+    {
+        var s = new PlayerStats();
+        KillFlavor.Apply(s, "awp", noscope: true, thruSmoke: true, inAir: true, attackerBlind: true, penetrated: 2, distance: 41.5f);
+        Assert.Equal(1, s.SniperKills);
+        Assert.Equal(1, s.NoScopeKills);
+        Assert.Equal(1, s.SmokeKills);
+        Assert.Equal(1, s.AirKills);
+        Assert.Equal(1, s.WallbangKills);
+        Assert.Equal(1, s.BlindKills);
+        Assert.Equal(41.5f, s.LongestKillDistance);
+
+        KillFlavor.Apply(s, "ak47", noscope: true, thruSmoke: false, inAir: false, attackerBlind: false, penetrated: 0, distance: 10f);
+        Assert.Equal(1, s.RifleKills);
+        Assert.Equal(1, s.NoScopeKills);
+        Assert.Equal(41.5f, s.LongestKillDistance);
+
+        KillFlavor.Apply(s, "knife", noscope: false, thruSmoke: false, inAir: false, attackerBlind: false, penetrated: 0, distance: 1f);
+        Assert.Equal(1, s.KnifeKills);
+
+        KillFlavor.Apply(s, "inferno", noscope: false, thruSmoke: false, inAir: false, attackerBlind: false, penetrated: 0, distance: 4f);
+        Assert.Equal(1, s.MolotovKills);
+        KillFlavor.ApplyNotices(s, dominated: 1, revenge: 1, wipe: 1);
+        Assert.Equal(1, s.Dominations);
+        Assert.Equal(1, s.Revenges);
+        Assert.Equal(1, s.TeamWipes);
+    }
+}
+
+public class PlayerStatsAccuracyTests
+{
+    [Fact]
+    public void Accuracy_uses_shots_on_target_when_present()
+    {
+        var s = new PlayerStats { ShotsFired = 10, ShotsOnTarget = 4, Hits = 12 };
+        Assert.Equal(40f, s.Accuracy, 3);
+        s.ShotsFired = 0;
+        Assert.Equal(0f, s.Accuracy);
     }
 }
 
@@ -143,10 +233,11 @@ public class KillCreditTests
     }
 
     [Fact]
-    public void Multi_kills_fire_at_3_4_5()
+    public void Multi_kills_fire_at_2_3_4_5()
     {
         var s = new PlayerStats();
         KillCredit.ApplyMultiKills(s, 2);
+        Assert.Equal(1, s.DoubleKills);
         Assert.Equal(0, s.TripleKills);
         KillCredit.ApplyMultiKills(s, 3);
         KillCredit.ApplyMultiKills(s, 4);
@@ -206,6 +297,117 @@ public class PlayerStatsStoreTests
     }
 
     [Fact]
+    public void Disconnect_keeps_scoreboard_for_upload_and_reconnect_restores_it()
+    {
+        var store = new PlayerStatsStore();
+        var a = store.Bind(2, isBot: false, steam: 76561198000000001UL);
+        a.Kills = 8;
+        a.Assists = 3;
+        a.Damage = 400;
+        a.Name = "alice";
+        a.Team = 3;
+        store.Disconnect(2);
+        Assert.Null(store.Get(2));
+        var parked = Assert.Single(store.HumansForUpload());
+        Assert.Equal(8, parked.Kills);
+        Assert.True(parked.Disconnected);
+
+        var bot = store.Bind(2, isBot: true);
+        Assert.True(bot.IsBot);
+        Assert.Equal(8, Assert.Single(store.HumansForUpload()).Kills);
+
+        var back = store.Bind(5, isBot: false, steam: 76561198000000001UL);
+        Assert.Same(parked, back);
+        Assert.False(back.Disconnected);
+        Assert.Equal(8, back.Kills);
+        Assert.Equal(5, back.Slot);
+        Assert.Equal(8, Assert.Single(store.HumansForUpload()).Kills);
+    }
+
+    [Fact]
+    public void Leaver_round_and_round_win_are_frozen()
+    {
+        var s = new PlayerStats { Team = 2, Disconnected = true, ReportedRound = 3, Damage = 400 };
+        Assert.Equal(3, s.RoundForUpload(8));
+        Assert.False(s.RoundWinForUpload(2));
+        Assert.Equal(3, s.ReportedRound);
+
+        var live = new PlayerStats { Team = 3 };
+        Assert.Equal(4, live.RoundForUpload(4));
+        Assert.True(live.RoundWinForUpload(3));
+        Assert.Equal(4, live.ReportedRound);
+    }
+
+    [Fact]
+    public void Round_reset_does_not_mutate_a_parked_leaver()
+    {
+        var store = new PlayerStatsStore();
+        var a = store.Bind(1, isBot: false, steam: 9);
+        a.RoundKills = 4;
+        a.DeadThisRound = true;
+        a.Kills = 12;
+        store.Disconnect(1);
+        store.ResetAllRounds();
+        Assert.Equal(4, a.RoundKills);
+        Assert.True(a.DeadThisRound);
+        Assert.Equal(12, a.Kills);
+    }
+
+    [Fact]
+    public void Late_steam_attach_absorbs_into_parked_record()
+    {
+        var store = new PlayerStatsStore();
+        var parked = store.Bind(1, isBot: false, steam: 42);
+        parked.Kills = 10;
+        store.Disconnect(1);
+
+        var stub = store.Bind(4, isBot: false, steam: 0);
+        stub.Kills = 1;
+        var merged = store.AttachSteam(4, 42);
+        Assert.Same(parked, merged);
+        Assert.Equal(11, merged.Kills);
+        Assert.False(merged.Disconnected);
+    }
+
+    [Fact]
+    public void NoteSteam_does_not_replace_parked_score_with_zero_stub()
+    {
+        var store = new PlayerStatsStore();
+        var live = store.Bind(2, isBot: false, steam: 99);
+        live.Kills = 7;
+        live.Assists = 4;
+        live.Damage = 250;
+        live.Team = 2;
+        live.Name = "bob";
+        store.Disconnect(2);
+
+        var ghost = new PlayerStats { Slot = 2, SteamId = 99 };
+        var canonical = store.NoteSteam(ghost);
+        Assert.Equal(7, canonical.Kills);
+        Assert.Equal(4, canonical.Assists);
+        Assert.Equal(250, canonical.Damage);
+        Assert.Equal("bob", canonical.Name);
+        Assert.Equal(7, Assert.Single(store.HumansForUpload()).Kills);
+    }
+
+    [Fact]
+    public void Resolve_does_not_steal_a_slot_taken_by_another_steam()
+    {
+        var store = new PlayerStatsStore();
+        var alice = store.Bind(3, isBot: false, steam: 1);
+        alice.Kills = 5;
+        store.Disconnect(3);
+
+        var bob = store.Bind(3, isBot: false, steam: 2);
+        bob.Kills = 1;
+        var resolved = store.Resolve(3, isBot: false, steam: 1);
+        Assert.Same(alice, resolved);
+        Assert.Equal(5, alice.Kills);
+        Assert.Same(bob, store.Get(3));
+        Assert.Equal(1, bob.Kills);
+    }
+
+    [Fact]
     public void Kdr_and_hs_percent()
     {
         var s = new PlayerStats { Kills = 10, Deaths = 4, Headshots = 3 };
@@ -225,6 +427,45 @@ public class PlayerStatsStoreTests
         s.UniqueKills.Add(2);
         Assert.Equal(2, s.UniqueKills.Count);
     }
+}
+
+public class ScoreboardMergeTests
+{
+    [Fact]
+    public void Apply_never_shrinks()
+    {
+        var stats = new PlayerStats { Kills = 10, Deaths = 3, Assists = 2, Damage = 400 };
+        ScoreboardMerge.Apply(stats, kills: 0, deaths: 0, assists: 0, damage: 0, headshots: 0, utilityDamage: 0, enemiesFlashed: 0);
+        Assert.Equal(10, stats.Kills);
+        Assert.Equal(3, stats.Deaths);
+        Assert.Equal(2, stats.Assists);
+        Assert.Equal(400, stats.Damage);
+        ScoreboardMerge.Apply(stats, kills: 12, deaths: 3, assists: 5, damage: 350, headshots: 4, utilityDamage: 20, enemiesFlashed: 1);
+        Assert.Equal(12, stats.Kills);
+        Assert.Equal(5, stats.Assists);
+        Assert.Equal(400, stats.Damage);
+        Assert.Equal(4, stats.Headshots);
+    }
+
+    [Fact]
+    public void Absorb_keeps_the_higher_kill_flavor_totals()
+    {
+        var dest = new PlayerStats { NoScopeKills = 2, KnifeKills = 1, LongestKillDistance = 20f };
+        var src = new PlayerStats { NoScopeKills = 1, KnifeKills = 4, LongestKillDistance = 41.5f, MolotovKills = 3 };
+        ScoreboardMerge.Absorb(dest, src);
+        Assert.Equal(2, dest.NoScopeKills);
+        Assert.Equal(4, dest.KnifeKills);
+        Assert.Equal(3, dest.MolotovKills);
+        Assert.Equal(41.5f, dest.LongestKillDistance);
+    }
+
+    [Theory]
+    [InlineData(8, 0, 8)]
+    [InlineData(8, 8, 8)]
+    [InlineData(8, 10, 10)]
+    [InlineData(8, 2, 10)]
+    public void MergeScoreboard_keeps_parked_and_adds_stub_extras(int dest, int src, int expected) =>
+        Assert.Equal(expected, ScoreboardMerge.MergeScoreboard(dest, src));
 }
 
 public class StatsPayloadTests
@@ -258,7 +499,10 @@ public class StatsPayloadTests
             BombPlants = 1,
             BombDefuses = 0,
             BombExplodes = 0,
-            EnemiesFlashed = 3
+            EnemiesFlashed = 3,
+            NoScopeKills = 1,
+            ShotsFired = 10,
+            ShotsOnTarget = 4
         };
         stats.UniqueKills.Add(76561198000000000UL);
 
@@ -295,6 +539,8 @@ public class StatsPayloadTests
         Assert.Equal(16000, row["money"]!.GetValue<int>());
         Assert.Equal(1, row["unique_kills"]!.GetValue<int>());
         Assert.Equal(2.5f, row["kdr"]!.GetValue<float>(), 3);
+        Assert.Equal(1, row["noscope_kills"]!.GetValue<int>());
+        Assert.Equal(40f, row["accuracy"]!.GetValue<float>(), 3);
     }
 
     [Fact]
@@ -313,6 +559,28 @@ public class StatsPayloadTests
         });
         Assert.False(row["round_win"]!.GetValue<bool>());
         Assert.Equal(0f, row["adr"]!.GetValue<float>());
+    }
+
+    [Fact]
+    public void Leaver_adr_stays_on_the_round_they_left()
+    {
+        var stats = new PlayerStats { Disconnected = true, ReportedRound = 4, Damage = 400, Team = 2 };
+        var round = stats.RoundForUpload(10);
+        var row = StatsPayload.ToPlayerObject(new PlayerUpload
+        {
+            SteamId = "1",
+            Team = stats.Team,
+            Round = round,
+            RoundWin = stats.RoundWinForUpload(2),
+            Stats = stats,
+            Assists = 1,
+            TotalDamage = stats.Damage,
+            Money = 800
+        });
+        Assert.Equal(4, row["round"]!.GetValue<int>());
+        Assert.Equal(100f, row["adr"]!.GetValue<float>(), 3);
+        Assert.False(row["round_win"]!.GetValue<bool>());
+        Assert.Equal(400, row["total_damage"]!.GetValue<int>());
     }
 }
 

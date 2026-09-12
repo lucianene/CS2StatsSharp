@@ -13,12 +13,16 @@ public sealed class StatsCollector
     private readonly PlaycupApiClient _api;
     private readonly ILogger _log;
     private readonly Dictionary<int, int> _healthMap = [];
-    private readonly List<PlayerStats> _disconnected = [];
     private bool _firstKillThisRound;
     private int _uploadBusy;
     private volatile bool _stopped;
     private volatile bool _worldReady;
     private bool _warnedMissingServerId;
+    private string _lastMapName = "unknown";
+    private int _lastRoundNumber;
+    private int _lastMaxRounds;
+    private int _storeEpoch;
+    private int _queuedFrozenEpoch = -1;
     private CounterStrikeSharp.API.Modules.Timers.Timer? _periodicTimer;
 
     public PlayerStatsStore Store { get; } = new();
@@ -56,8 +60,12 @@ public sealed class StatsCollector
         _worldReady = false;
         _firstKillThisRound = false;
         _healthMap.Clear();
-        _disconnected.Clear();
         Clock.Reset();
+        _queuedFrozenEpoch = -1;
+        // If OnMapEnd was skipped, POST last map's parked rows with the cached
+        // map name before wiping. Duplicate of OnMapEnd is idempotent.
+        Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: false);
+        _storeEpoch++;
         Store.Clear();
         Server.NextWorldUpdate(TrySeedWorld);
     }
@@ -66,6 +74,24 @@ public sealed class StatsCollector
     {
         _worldReady = false;
         Clock.Reset();
+        _queuedFrozenEpoch = -1;
+        // Entity list is dying. POST parked steam snapshots with the *cached*
+        // map/round so a leaver is not labeled as the next map, then OnMapStart
+        // can Clear.
+        Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: false);
+    }
+
+    public void OnUnload()
+    {
+        _queuedFrozenEpoch = -1;
+        try
+        {
+            Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: false);
+        }
+        catch
+        {
+        }
+        Stop();
     }
 
     /// <summary>
@@ -90,11 +116,7 @@ public sealed class StatsCollector
             var p = Players.FromSlot(i);
             if (!Players.IsValid(p))
                 continue;
-            var isBot = false;
-            try { isBot = p!.IsBot; }
-            catch (NativeException) { }
-            var stats = Store.Replace(i, isBot);
-            TouchSteam(p!, stats);
+            BindController(p!, occupySlot: true);
         }
     }
 
@@ -103,16 +125,13 @@ public sealed class StatsCollector
         if ((uint)slot >= PlayerStatsStore.MaxPlayers)
             return;
         var p = Players.FromSlot(slot);
-        var isBot = false;
         if (Players.IsValid(p))
         {
-            try { isBot = p!.IsBot || p.IsHLTV; }
-            catch (NativeException) { }
+            BindController(p!, occupySlot: true);
+            return;
         }
 
-        var stats = Store.Replace(slot, isBot);
-        if (Players.IsValid(p))
-            TouchSteam(p!, stats);
+        Store.Bind(slot, isBot: false, steam: 0);
     }
 
     public void OnClientPutInServer(int slot)
@@ -122,33 +141,54 @@ public sealed class StatsCollector
         var p = Players.FromSlot(slot);
         if (!Players.IsValid(p))
             return;
-        var stats = Store.Get(slot) ?? Store.Replace(slot, false);
-        stats.Disconnected = false;
-        TouchSteam(p!, stats);
+        BindController(p!, occupySlot: true);
     }
 
-    public void OnClientDisconnect(int slot)
+    public void OnClientDisconnect(int slot) => FreezeAndPark(slot, upload: true);
+
+    public void OnClientDisconnectPost(int slot)
     {
         _healthMap.Remove(slot);
-        var stats = Store.Get(slot);
-        Store.Remove(slot);
-        if (stats is { IsBot: false, SteamId: not 0 })
+        var p = Players.FromSlot(slot);
+        if (Players.IsValid(p))
         {
-            stats.Disconnected = true;
-            _disconnected.Add(stats);
+            try
+            {
+                if (p!.Connected == PlayerConnectedState.PlayerConnected)
+                    return;
+            }
+            catch (NativeException)
+            {
+            }
         }
+        Store.Disconnect(slot);
+    }
+
+    public void OnPlayerDisconnect(EventPlayerDisconnect ev)
+    {
+        var p = ev.Userid;
+        var steam = ev.Xuid;
+        if (Players.IsValid(p))
+        {
+            FreezeController(p!, steam);
+            return;
+        }
+
+        if (steam != 0 && Store.GetBySteam(steam) is { } parked)
+            parked.Disconnected = true;
     }
 
     public void OnClientAuthorized(int slot, ulong steamId64)
     {
         if ((uint)slot >= PlayerStatsStore.MaxPlayers)
             return;
+        var stats = Store.AttachSteam(slot, steamId64);
         var p = Players.FromSlot(slot);
-        var stats = Store.Get(slot) ?? Store.Replace(slot, false);
-        if (steamId64 != 0)
-            stats.SteamId = steamId64;
         if (Players.IsValid(p))
-            TouchSteam(p!, stats);
+        {
+            Players.Capture(p!, stats);
+            Store.NoteSteam(stats);
+        }
     }
 
     public void OnRoundStart()
@@ -168,7 +208,7 @@ public sealed class StatsCollector
             return;
 
         var stats = StatsOf(player!);
-        if (stats is null)
+        if (stats is null || stats.Disconnected)
             return;
         stats.ResetRound();
         _healthMap.Remove(stats.Slot);
@@ -266,12 +306,16 @@ public sealed class StatsCollector
             killerStats.ClutchKills++;
 
         var weapon = ev.Weapon ?? "";
-        if (WeaponKinds.IsPistol(weapon)) killerStats.PistolKills++;
-        if (WeaponKinds.IsSniper(weapon)) killerStats.SniperKills++;
-        if (WeaponKinds.IsBombKill(weapon)) killerStats.BombKills++;
-
-        if (Server.CurrentTime < killerStats.FlashExpiry)
-            killerStats.BlindKills++;
+        KillFlavor.Apply(
+            killerStats,
+            weapon,
+            noscope: ev.Noscope,
+            thruSmoke: ev.Thrusmoke,
+            inAir: ev.Attackerinair,
+            attackerBlind: ev.Attackerblind || Server.CurrentTime < killerStats.FlashExpiry,
+            penetrated: ev.Penetrated,
+            distance: ev.Distance);
+        KillFlavor.ApplyNotices(killerStats, ev.Dominated, ev.Revenge, ev.Wipe);
 
         if (Players.IsHuman(victim))
         {
@@ -284,7 +328,11 @@ public sealed class StatsCollector
         {
             var assisterStats = StatsOf(ev.Assister!);
             if (assisterStats is not null)
+            {
                 assisterStats.Assists++;
+                if (ev.Assistedflash)
+                    assisterStats.FlashAssists++;
+            }
         }
     }
 
@@ -431,6 +479,29 @@ public sealed class StatsCollector
             stats.ChickenKills++;
     }
 
+    public void OnGrenadeThrown(EventGrenadeThrown ev)
+    {
+        if (!_cvars.Enabled.Value || !_worldReady)
+            return;
+        var player = ev.Userid;
+        if (!Players.IsValid(player))
+            return;
+        var stats = StatsOf(player!);
+        if (stats is not null)
+            WeaponKinds.CountThrow(stats, ev.Weapon);
+    }
+
+    public void OnHostageRescued(CCSPlayerController? player)
+    {
+        if (!_cvars.Enabled.Value || !_worldReady)
+            return;
+        if (!Players.IsValid(player))
+            return;
+        var stats = StatsOf(player!);
+        if (stats is not null)
+            stats.HostageRescues++;
+    }
+
     public void OnRoundEnd(EventRoundEnd ev)
     {
         if (!_cvars.Enabled.Value || !_worldReady)
@@ -476,20 +547,32 @@ public sealed class StatsCollector
         Upload(winner: -1);
     }
 
-    private void Upload(int winner)
+    private void Upload(int winner, bool requireWorld = true, bool captureLive = true, bool refreshMeta = true)
     {
-        if (_stopped || !_worldReady)
+        if (_stopped)
             return;
-        if (Interlocked.CompareExchange(ref _uploadBusy, 1, 0) != 0)
+        if (!_cvars.Enabled.Value)
+            return;
+        if (requireWorld && !_worldReady)
+            return;
+
+        var useBusy = captureLive;
+        var tookBusy = false;
+        if (useBusy)
         {
-            _log.LogInformation("[CS2SP] Skipping stats upload: previous request still in flight.");
-            return;
+            if (Interlocked.CompareExchange(ref _uploadBusy, 1, 0) != 0)
+            {
+                _log.LogInformation("[CS2SP] Skipping stats upload: previous request still in flight.");
+                return;
+            }
+
+            tookBusy = true;
         }
 
         var sent = false;
         try
         {
-            sent = TryPost(winner);
+            sent = TryPost(winner, captureLive, refreshMeta, releaseBusy: tookBusy);
         }
         catch (NativeException)
         {
@@ -502,20 +585,13 @@ public sealed class StatsCollector
         }
         finally
         {
-            if (!sent)
+            if (tookBusy && !sent)
                 Interlocked.Exchange(ref _uploadBusy, 0);
         }
     }
 
-    private bool TryPost(int winner)
+    private bool TryPost(int winner, bool captureLive, bool refreshMeta, bool releaseBusy)
     {
-        var rules = Players.GameRules();
-        if (rules is null)
-        {
-            _log.LogInformation("[CS2SP] Skipping stats upload: game rules not ready.");
-            return false;
-        }
-
         var apiAddress = _cvars.ApiAddressText;
         if (!UploadUrl.IsConfigured(apiAddress))
         {
@@ -523,85 +599,26 @@ public sealed class StatsCollector
             return false;
         }
 
-        int roundNumber;
-        try { roundNumber = rules.TotalRoundsPlayed; }
-        catch (NativeException)
-        {
-            _log.LogInformation("[CS2SP] Skipping stats upload: game rules not ready.");
-            return false;
-        }
+        var roundNumber = _lastRoundNumber;
+        var maxRounds = _lastMaxRounds;
+        var mapName = _lastMapName;
+        if (refreshMeta)
+            RefreshMatchMeta(ref roundNumber, ref maxRounds, ref mapName);
 
-        var maxRounds = EngineCvars.GetInt("mp_maxrounds", 0);
-        var mapName = string.IsNullOrEmpty(Server.MapName) ? "unknown" : Server.MapName;
+        if (string.IsNullOrEmpty(mapName))
+            mapName = "unknown";
+
+        if (captureLive)
+            CaptureLiveHumans();
+
         var matchId = _cvars.MatchIdText;
         var gameMode = _cvars.GameModeText;
         var mod = _cvars.ModText;
 
         var uploads = new List<PlayerUpload>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        for (var i = 0; i < PlayerStatsStore.MaxPlayers; i++)
+        foreach (var stats in Store.HumansForUpload())
         {
-            try
-            {
-                var p = Players.FromSlot(i);
-                if (!Players.IsHuman(p))
-                    continue;
-
-                var stats = Store.Get(p!.Slot);
-                if (stats is null)
-                    continue;
-
-                var steam = Players.SteamId64(p);
-                if (steam == 0)
-                    steam = stats.SteamId;
-                if (steam == 0)
-                    continue;
-
-                stats.SteamId = steam;
-                TouchSteam(p, stats);
-                var key = StatsPayload.SteamKey(steam);
-                if (!seen.Add(key))
-                    continue;
-
-                int assists = stats.Assists;
-                int totalDamage = stats.Damage;
-                int money = 0;
-                try
-                {
-                    var matchStats = p.ActionTrackingServices?.MatchStats;
-                    if (matchStats is not null)
-                    {
-                        assists = matchStats.Assists;
-                        totalDamage = matchStats.Damage;
-                    }
-                    money = p.InGameMoneyServices?.Account ?? 0;
-                }
-                catch (NativeException)
-                {
-                }
-
-                uploads.Add(new PlayerUpload
-                {
-                    SteamId = key,
-                    Name = string.IsNullOrEmpty(stats.Name) ? Players.Name(p) : stats.Name,
-                    Team = Players.PawnTeamNum(p),
-                    Round = roundNumber,
-                    RoundWin = winner == Players.PawnTeamNum(p),
-                    Stats = stats,
-                    Assists = assists,
-                    TotalDamage = totalDamage,
-                    Money = money
-                });
-            }
-            catch (NativeException)
-            {
-            }
-        }
-
-        foreach (var stats in _disconnected)
-        {
-            if (stats.IsBot || stats.SteamId == 0)
-                continue;
             var key = StatsPayload.SteamKey(stats.SteamId);
             if (!seen.Add(key))
                 continue;
@@ -609,13 +626,13 @@ public sealed class StatsCollector
             {
                 SteamId = key,
                 Name = stats.Name,
-                Team = 0,
-                Round = roundNumber,
-                RoundWin = false,
+                Team = stats.Team,
+                Round = stats.RoundForUpload(roundNumber),
+                RoundWin = stats.RoundWinForUpload(winner),
                 Stats = stats,
                 Assists = stats.Assists,
                 TotalDamage = stats.Damage,
-                Money = 0
+                Money = stats.Money
             });
         }
 
@@ -649,19 +666,63 @@ public sealed class StatsCollector
             mapName,
             roundNumber);
 
-        var flushed = _disconnected.ToList();
         _api.Post(uri,
             json,
             serverId: string.IsNullOrEmpty(serverId) ? null : serverId,
             onSuccess: node =>
             {
-                Interlocked.Exchange(ref _uploadBusy, 0);
-                foreach (var s in flushed)
-                    _disconnected.Remove(s);
+                if (releaseBusy)
+                    Interlocked.Exchange(ref _uploadBusy, 0);
                 _log.LogInformation("[CS2SP] Stats upload succeeded: {Body}", node?.ToJsonString() ?? "{}");
             },
-            onError: (_, _) => Interlocked.Exchange(ref _uploadBusy, 0));
+            onError: (_, _) =>
+            {
+                if (releaseBusy)
+                    Interlocked.Exchange(ref _uploadBusy, 0);
+            });
         return true;
+    }
+
+    private void RefreshMatchMeta(ref int roundNumber, ref int maxRounds, ref string mapName)
+    {
+        try
+        {
+            var rules = Players.GameRules();
+            if (rules is not null)
+            {
+                try { roundNumber = rules.TotalRoundsPlayed; }
+                catch (NativeException) { }
+            }
+
+            maxRounds = EngineCvars.GetInt("mp_maxrounds", maxRounds);
+            if (!string.IsNullOrEmpty(Server.MapName))
+                mapName = Server.MapName;
+        }
+        catch (NativeException)
+        {
+        }
+
+        _lastRoundNumber = roundNumber;
+        _lastMaxRounds = maxRounds;
+        _lastMapName = string.IsNullOrEmpty(mapName) ? "unknown" : mapName;
+        mapName = _lastMapName;
+    }
+
+    private void CaptureLiveHumans()
+    {
+        for (var i = 0; i < PlayerStatsStore.MaxPlayers; i++)
+        {
+            try
+            {
+                var p = Players.FromSlot(i);
+                if (!Players.IsLiveHuman(p))
+                    continue;
+                CaptureCanonical(p!, occupySlot: false);
+            }
+            catch (NativeException)
+            {
+            }
+        }
     }
 
     private PlayerStats? StatsOf(CCSPlayerController player)
@@ -671,13 +732,100 @@ public sealed class StatsCollector
             var slot = player.Slot;
             if ((uint)slot >= PlayerStatsStore.MaxPlayers)
                 return null;
-            var stats = Store.GetOrCreate(slot, player.IsBot);
-            TouchSteam(player, stats);
-            return stats;
+            var isBot = player.IsBot;
+            var steam = Players.SteamId64(player);
+            var stats = Store.Resolve(slot, isBot, steam);
+            if (stats.Disconnected)
+                return null;
+            Players.Capture(player, stats);
+            return Store.NoteSteam(stats);
         }
         catch (NativeException)
         {
             return null;
+        }
+    }
+
+    private void BindController(CCSPlayerController player, bool occupySlot)
+    {
+        CaptureCanonical(player, occupySlot);
+    }
+
+    private PlayerStats CaptureCanonical(CCSPlayerController player, bool occupySlot)
+    {
+        var isBot = false;
+        try { isBot = player.IsBot || player.IsHLTV; }
+        catch (NativeException) { }
+
+        var steam = Players.SteamId64(player);
+        var slot = player.Slot;
+        var stats = occupySlot
+            ? Store.Bind(slot, isBot, steam)
+            : Store.Resolve(slot, isBot, steam);
+        Players.Capture(player, stats);
+        var canonical = Store.NoteSteam(stats);
+        if (!isBot)
+            canonical.Disconnected = false;
+        return canonical;
+    }
+
+    private PlayerStats? FreezeController(CCSPlayerController player, ulong steamHint)
+    {
+        try
+        {
+            var isBot = false;
+            try { isBot = player.IsBot || player.IsHLTV; }
+            catch (NativeException) { }
+
+            var steam = steamHint != 0 ? steamHint : Players.SteamId64(player);
+            var slot = player.Slot;
+            var stats = Store.Resolve(slot, isBot, steam);
+            Players.Capture(player, stats);
+            if (steam != 0)
+                stats.SteamId = steam;
+            return Store.NoteSteam(stats);
+        }
+        catch (NativeException)
+        {
+            return null;
+        }
+    }
+
+    private void FreezeAndPark(int slot, bool upload)
+    {
+        _healthMap.Remove(slot);
+        var p = Players.FromSlot(slot);
+        PlayerStats? stats = Store.Get(slot);
+        if (Players.IsValid(p))
+            stats = FreezeController(p!, steamHint: 0) ?? stats;
+        else if (stats is not null)
+            stats = Store.NoteSteam(stats);
+
+        Store.Disconnect(slot);
+        if (upload && stats is { IsBot: false, SteamId: not 0 })
+            QueueFrozenUpload();
+    }
+
+    private void QueueFrozenUpload()
+    {
+        var epoch = _storeEpoch;
+        if (_queuedFrozenEpoch == epoch)
+            return;
+        _queuedFrozenEpoch = epoch;
+        try
+        {
+            Server.NextWorldUpdate(() =>
+            {
+                if (_storeEpoch != epoch)
+                    return;
+                _queuedFrozenEpoch = -1;
+                Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: true);
+            });
+        }
+        catch
+        {
+            _queuedFrozenEpoch = -1;
+            Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: true);
         }
     }
 
@@ -696,17 +844,5 @@ public sealed class StatsCollector
         {
             return Math.Max(0, eventHealth);
         }
-    }
-
-    private static void TouchSteam(CCSPlayerController player, PlayerStats stats)
-    {
-        var steam = Players.SteamId64(player);
-        if (steam != 0)
-            stats.SteamId = steam;
-        try { stats.IsBot = player.IsBot; }
-        catch (NativeException) { }
-        var name = Players.Name(player);
-        if (name.Length > 0)
-            stats.Name = name;
     }
 }

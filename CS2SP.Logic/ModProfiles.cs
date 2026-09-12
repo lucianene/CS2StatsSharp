@@ -4,7 +4,8 @@ namespace CS2SP.Logic;
 /// Per-mod scoring behavior selected by <c>sp_mod</c>. Unknown / empty
 /// names fall back to the first row (matchmaking). Uploads are not gated
 /// here: every mod POSTs on the periodic timer, and also on <c>round_end</c>
-/// when the engine fires it.
+/// when the engine fires it. A disconnected player's frozen row is included
+/// in both paths until map change.
 /// </summary>
 public readonly record struct ModProfile(
     string Name,
@@ -13,18 +14,35 @@ public readonly record struct ModProfile(
 
 public static class ModProfiles
 {
+    /// <summary>Round-based teams, no mid-round respawn (CS2MM-style).</summary>
     public static readonly ModProfile Matchmaking = new("matchmaking", FreeForAll: false, ResetStateOnSpawn: false);
+
+    /// <summary>FFA + instant respawn. PlayCup cs2dm.</summary>
     public static readonly ModProfile Deathmatch = new("deathmatch", FreeForAll: true, ResetStateOnSpawn: true);
+
+    /// <summary>Team scoring + respawn waves + round_end. PlayCup cs2aim.</summary>
     public static readonly ModProfile Aim = new("aim", FreeForAll: false, ResetStateOnSpawn: true);
 
-    // Add rows here for retake / zombie / … — handlers only read these flags.
+    /// <summary>Round-based teams, no mid-round respawn. PlayCup cs2casual.</summary>
+    public static readonly ModProfile Casual = new("casual", FreeForAll: false, ResetStateOnSpawn: false);
+
+    /// <summary>
+    /// Team scoring (humans vs zombies). Zombies respawn so DeadThisRound must
+    /// clear on spawn; humans stay dead until round_start. PlayCup cs2zm.
+    /// </summary>
+    public static readonly ModProfile Zombie = new("zombie", FreeForAll: false, ResetStateOnSpawn: true);
+
+    /// <summary>Round-based teams. Not a PlayCup container; same flags as casual.</summary>
+    public static readonly ModProfile Retake = new("retake", FreeForAll: false, ResetStateOnSpawn: false);
+
     public static readonly ModProfile[] All =
     [
         Matchmaking,
         Deathmatch,
         Aim,
-        // new("retake", FreeForAll: false, ResetStateOnSpawn: false),
-        // new("zombie", FreeForAll: false, ResetStateOnSpawn: true),
+        Casual,
+        Zombie,
+        Retake,
     ];
 
     public static ModProfile Resolve(string? name)

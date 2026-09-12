@@ -2,6 +2,7 @@ using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Cvars;
 using CounterStrikeSharp.API.Modules.Utils;
+using CS2SP.Logic;
 
 namespace CS2SP;
 
@@ -32,6 +33,25 @@ public static class Players
         catch (NativeException)
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Still in the session. After <c>OnClientDisconnect</c> the controller can
+    /// linger as Disconnecting/Disconnected with a zeroed scoreboard — do not
+    /// walk those on periodic/round POSTs.
+    /// </summary>
+    public static bool IsLiveHuman(CCSPlayerController? p)
+    {
+        if (!IsHuman(p))
+            return false;
+        try
+        {
+            return p!.Connected == PlayerConnectedState.PlayerConnected;
+        }
+        catch (NativeException)
+        {
+            return true;
         }
     }
 
@@ -126,6 +146,80 @@ public static class Players
         catch (NativeException)
         {
             return CsTeam.None;
+        }
+    }
+
+    /// <summary>
+    /// Freeze identity + scoreboard into <paramref name="stats"/> while the
+    /// controller is still readable (connect, tick, disconnect).
+    /// </summary>
+    public static void Capture(CCSPlayerController player, PlayerStats stats)
+    {
+        try
+        {
+            stats.IsBot = player.IsBot || player.IsHLTV;
+        }
+        catch (NativeException)
+        {
+        }
+
+        var steam = SteamId64(player);
+        if (steam != 0)
+            stats.SteamId = steam;
+
+        var name = Name(player);
+        if (name.Length > 0)
+            stats.Name = name;
+
+        var team = PawnTeamNum(player);
+        if (team == 0)
+            team = (int)ControllerTeam(player);
+        if (team != 0)
+            stats.Team = team;
+
+        try
+        {
+            var money = player.InGameMoneyServices?.Account;
+            if (money is int m)
+                stats.Money = m;
+        }
+        catch (NativeException)
+        {
+        }
+
+        try
+        {
+            var match = player.ActionTrackingServices?.MatchStats;
+            if (match is null)
+                return;
+            ScoreboardMerge.Apply(
+                stats,
+                match.Kills,
+                match.Deaths,
+                match.Assists,
+                match.Damage,
+                match.HeadShotKills,
+                match.UtilityDamage,
+                match.EnemiesFlashed);
+            if (match.ShotsFiredTotal > stats.ShotsFired)
+                stats.ShotsFired = match.ShotsFiredTotal;
+            if (match.ShotsOnTargetTotal > stats.ShotsOnTarget)
+                stats.ShotsOnTarget = match.ShotsOnTargetTotal;
+            if (match.EnemyKnifeKills > stats.KnifeKills)
+                stats.KnifeKills = match.EnemyKnifeKills;
+            if (match.EnemyTaserKills > stats.ZeusKills)
+                stats.ZeusKills = match.EnemyTaserKills;
+            if (match.Enemy2Ks > stats.DoubleKills)
+                stats.DoubleKills = match.Enemy2Ks;
+            if (match.Enemy3Ks > stats.TripleKills)
+                stats.TripleKills = match.Enemy3Ks;
+            if (match.Enemy4Ks > stats.QuadroKills)
+                stats.QuadroKills = match.Enemy4Ks;
+            if (match.Enemy5Ks > stats.PentaKills)
+                stats.PentaKills = match.Enemy5Ks;
+        }
+        catch (NativeException)
+        {
         }
     }
 

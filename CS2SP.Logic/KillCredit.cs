@@ -51,6 +51,7 @@ public static class KillCredit
 
     public static void ApplyMultiKills(PlayerStats killer, int roundKills)
     {
+        if (roundKills == 2) killer.DoubleKills++;
         if (roundKills == 3) killer.TripleKills++;
         if (roundKills == 4) killer.QuadroKills++;
         if (roundKills == 5) killer.PentaKills++;
