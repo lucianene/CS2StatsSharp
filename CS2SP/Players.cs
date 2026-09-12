@@ -108,14 +108,19 @@ public static class Players
     {
         try
         {
-            if (player.AuthorizedSteamID is { SteamId64: var auth } && auth != 0)
+            if (player.IsBot || player.IsHLTV)
+                return 0;
+            if (player.AuthorizedSteamID is { SteamId64: var auth } && SteamIds.IsIndividual(auth))
                 return auth;
-            return player.SteamID;
+            // Pre-auth humans already have m_steamID; bots' XUID is not an individual Steam64.
+            if (SteamIds.IsIndividual(player.SteamID))
+                return player.SteamID;
         }
         catch (NativeException)
         {
-            return 0;
         }
+
+        return 0;
     }
 
     /// <summary>

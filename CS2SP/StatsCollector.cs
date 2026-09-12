@@ -118,7 +118,7 @@ public sealed class StatsCollector
             try
             {
                 var p = Players.FromSlot(i);
-                if (!Players.IsConnectedOccupant(p))
+                if (!Players.IsHuman(p) || !Players.IsConnectedOccupant(p))
                     continue;
                 BindController(p!, occupySlot: true, scoreboard: false);
             }
@@ -136,13 +136,13 @@ public sealed class StatsCollector
         if ((uint)slot >= PlayerStatsStore.MaxPlayers)
             return;
         var p = Players.FromSlot(slot);
-        if (Players.IsValid(p))
+        if (Players.IsHuman(p))
         {
             BindController(p!, occupySlot: true, scoreboard: false);
             return;
         }
 
-        Store.Bind(slot, isBot: false, steam: 0);
+        Store.Bind(slot, isBot: true, steam: 0);
     }
 
     public void OnClientPutInServer(int slot)
@@ -150,7 +150,7 @@ public sealed class StatsCollector
         if ((uint)slot >= PlayerStatsStore.MaxPlayers)
             return;
         var p = Players.FromSlot(slot);
-        if (!Players.IsValid(p))
+        if (!Players.IsHuman(p))
             return;
         BindController(p!, occupySlot: true, scoreboard: false);
     }
@@ -179,7 +179,9 @@ public sealed class StatsCollector
     {
         var p = ev.Userid;
         var steam = ev.Xuid;
-        if (Players.IsValid(p))
+        if (!SteamIds.IsIndividual(steam))
+            steam = 0;
+        if (Players.IsHuman(p))
         {
             FreezeController(p!, steam);
             return;
@@ -193,8 +195,12 @@ public sealed class StatsCollector
     {
         if ((uint)slot >= PlayerStatsStore.MaxPlayers)
             return;
-        var stats = Store.AttachSteam(slot, steamId64);
+        if (!SteamIds.IsIndividual(steamId64))
+            return;
         var p = Players.FromSlot(slot);
+        if (p is not null && !Players.IsHuman(p))
+            return;
+        var stats = Store.AttachSteam(slot, steamId64);
         if (Players.IsValid(p))
         {
             Players.Capture(p!, stats, scoreboard: false);
@@ -767,11 +773,13 @@ public sealed class StatsCollector
 
     private PlayerStats CaptureCanonical(CCSPlayerController player, bool occupySlot, bool scoreboard)
     {
-        var isBot = false;
+        var isBot = true;
         try { isBot = player.IsBot || player.IsHLTV; }
-        catch (NativeException) { }
+        catch (NativeException) { /* fail closed: do not index as a human */ }
 
         var steam = Players.SteamId64(player);
+        if (isBot)
+            steam = 0;
         var slot = player.Slot;
         var stats = occupySlot
             ? Store.Bind(slot, isBot, steam)
@@ -787,11 +795,13 @@ public sealed class StatsCollector
     {
         try
         {
-            var isBot = false;
+            var isBot = true;
             try { isBot = player.IsBot || player.IsHLTV; }
             catch (NativeException) { }
 
             var steam = steamHint != 0 ? steamHint : Players.SteamId64(player);
+            if (isBot || !SteamIds.IsIndividual(steam))
+                steam = 0;
             var slot = player.Slot;
             var stats = Store.Resolve(slot, isBot, steam);
             Players.Capture(player, stats, scoreboard: true);
@@ -816,7 +826,7 @@ public sealed class StatsCollector
             stats = Store.NoteSteam(stats);
 
         Store.Disconnect(slot);
-        if (upload && stats is { IsBot: false, SteamId: not 0 })
+        if (upload && stats is { IsBot: false } && SteamIds.IsIndividual(stats.SteamId))
             QueueFrozenUpload();
     }
 

@@ -272,6 +272,18 @@ public class KillCreditTests
     }
 }
 
+public class SteamIdsTests
+{
+    [Theory]
+    [InlineData(0UL, false)]
+    [InlineData(99UL, false)]
+    [InlineData(76561197960265727UL, false)]
+    [InlineData(76561197960265728UL, true)]
+    [InlineData(76561198000000001UL, true)]
+    public void Individual_steam64(ulong id, bool expected) =>
+        Assert.Equal(expected, SteamIds.IsIndividual(id));
+}
+
 public class PlayerStatsStoreTests
 {
     [Fact]
@@ -373,7 +385,7 @@ public class PlayerStatsStoreTests
     public void NoteSteam_does_not_replace_parked_score_with_zero_stub()
     {
         var store = new PlayerStatsStore();
-        var live = store.Bind(2, isBot: false, steam: 99);
+        var live = store.Bind(2, isBot: false, steam: 76561198000000099UL);
         live.Kills = 7;
         live.Assists = 4;
         live.Damage = 250;
@@ -381,7 +393,7 @@ public class PlayerStatsStoreTests
         live.Name = "bob";
         store.Disconnect(2);
 
-        var ghost = new PlayerStats { Slot = 2, SteamId = 99 };
+        var ghost = new PlayerStats { Slot = 2, SteamId = 76561198000000099UL };
         var canonical = store.NoteSteam(ghost);
         Assert.Equal(7, canonical.Kills);
         Assert.Equal(4, canonical.Assists);
@@ -405,6 +417,17 @@ public class PlayerStatsStoreTests
         Assert.Equal(5, alice.Kills);
         Assert.Same(bob, store.Get(3));
         Assert.Equal(1, bob.Kills);
+    }
+
+    [Fact]
+    public void HumansForUpload_skips_bots_and_non_steam64()
+    {
+        var store = new PlayerStatsStore();
+        store.Bind(1, isBot: true, steam: 76561198000000001UL).Kills = 3;
+        store.Bind(2, isBot: false, steam: 99).Kills = 4;
+        var human = store.Bind(3, isBot: false, steam: 76561198000000002UL);
+        human.Kills = 9;
+        Assert.Equal(9, Assert.Single(store.HumansForUpload()).Kills);
     }
 
     [Fact]

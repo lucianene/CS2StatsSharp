@@ -394,7 +394,7 @@ public sealed class PlayerStatsStore
     {
         foreach (var s in _bySteam.Values)
         {
-            if (!s.IsBot && s.SteamId != 0)
+            if (!s.IsBot && SteamIds.IsIndividual(s.SteamId))
                 yield return s;
         }
     }
