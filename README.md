@@ -34,6 +34,8 @@ game/csgo/addons/counterstrikesharp/plugins/CS2SP/CS2SP.dll
 game/csgo/addons/counterstrikesharp/plugins/CS2SP/CS2SP.Logic.dll
 ```
 
+`make setup` / `make plugins` on **cs2aim**, **cs2dm**, **cs2zm**, and **cs2casual** compile this plugin into that mod's `addons`. **cs2mm** does not — stats are built into CS2MM.
+
 On a PlayCup game box, from `game-servers/cs2mm/CS2StatsSharp/`:
 
 ```bash
