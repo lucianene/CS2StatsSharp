@@ -150,11 +150,47 @@ public static class Players
     }
 
     /// <summary>
-    /// Freeze identity + scoreboard into <paramref name="stats"/> while the
-    /// controller is still readable (connect, tick, disconnect).
+    /// Controller is fully in-session. Fail closed on native errors so map-load
+    /// leftovers are not walked (their service pointers AV process-wide).
     /// </summary>
-    public static void Capture(CCSPlayerController player, PlayerStats stats)
+    public static bool IsConnectedOccupant(CCSPlayerController? p)
     {
+        if (!IsValid(p))
+            return false;
+        try
+        {
+            return p!.Handle != IntPtr.Zero
+                && p.Connected == PlayerConnectedState.PlayerConnected;
+        }
+        catch (NativeException)
+        {
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Freeze identity (always) and optionally the engine scoreboard into
+    /// <paramref name="stats"/>. Scoreboard reads <c>CSPerRoundStats_t</c> only
+    /// — extra <c>CSMatchStats_t</c> fields are raw <c>Schema.GetRef</c> and
+    /// AccessViolation abort the process if the pointer or offset is wrong.
+    /// Skip scoreboard during map-load seed; leftover controllers are not ready.
+    /// </summary>
+    public static void Capture(CCSPlayerController player, PlayerStats stats, bool scoreboard = true)
+    {
+        try
+        {
+            if (player.Handle == IntPtr.Zero)
+                return;
+        }
+        catch
+        {
+            return;
+        }
+
         try
         {
             stats.IsBot = player.IsBot || player.IsHLTV;
@@ -177,21 +213,32 @@ public static class Players
         if (team != 0)
             stats.Team = team;
 
+        if (!scoreboard)
+            return;
+
         try
         {
-            var money = player.InGameMoneyServices?.Account;
-            if (money is int m)
-                stats.Money = m;
+            var money = player.InGameMoneyServices;
+            if (money is not null && money.Handle != IntPtr.Zero)
+                stats.Money = money.Account;
         }
         catch (NativeException)
+        {
+        }
+        catch
         {
         }
 
         try
         {
-            var match = player.ActionTrackingServices?.MatchStats;
-            if (match is null)
+            var tracking = player.ActionTrackingServices;
+            if (tracking is null || tracking.Handle == IntPtr.Zero)
                 return;
+            var match = tracking.MatchStats;
+            if (match.Handle == IntPtr.Zero)
+                return;
+            // Copy primitives immediately. GetRef is a raw pointer add — a
+            // dangling leftover controller during levelload AVs here.
             ScoreboardMerge.Apply(
                 stats,
                 match.Kills,
@@ -201,24 +248,11 @@ public static class Players
                 match.HeadShotKills,
                 match.UtilityDamage,
                 match.EnemiesFlashed);
-            if (match.ShotsFiredTotal > stats.ShotsFired)
-                stats.ShotsFired = match.ShotsFiredTotal;
-            if (match.ShotsOnTargetTotal > stats.ShotsOnTarget)
-                stats.ShotsOnTarget = match.ShotsOnTargetTotal;
-            if (match.EnemyKnifeKills > stats.KnifeKills)
-                stats.KnifeKills = match.EnemyKnifeKills;
-            if (match.EnemyTaserKills > stats.ZeusKills)
-                stats.ZeusKills = match.EnemyTaserKills;
-            if (match.Enemy2Ks > stats.DoubleKills)
-                stats.DoubleKills = match.Enemy2Ks;
-            if (match.Enemy3Ks > stats.TripleKills)
-                stats.TripleKills = match.Enemy3Ks;
-            if (match.Enemy4Ks > stats.QuadroKills)
-                stats.QuadroKills = match.Enemy4Ks;
-            if (match.Enemy5Ks > stats.PentaKills)
-                stats.PentaKills = match.Enemy5Ks;
         }
         catch (NativeException)
+        {
+        }
+        catch
         {
         }
     }

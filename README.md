@@ -65,6 +65,6 @@ Kill flavor (`player_death`): first/clutch, 2/3/4/5k, pistol/rifle/smg/shotgun/s
 
 Utility: flash/HE/smoke/molotov/decoy thrown, flash assists, enemies flashed, utility/fire damage, dinks. Casual hostage maps: rescues.
 
-Accuracy: `shots_on_target / shots_fired` from MatchStats (not `weapon_fire`).
+Accuracy: event hits vs shots when those counters are present. Engine `CSMatchStats_t` extras are not read (raw schema refs can abort srcds).
 
 New keys need a `mod_player_stats` column + `ModPlayerStats` fillable. Do **not** add them to `match_player_stats` unless CS2MM also sends them.

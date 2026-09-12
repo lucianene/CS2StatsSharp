@@ -67,7 +67,9 @@ public sealed class StatsCollector
         Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: false);
         _storeEpoch++;
         Store.Clear();
-        Server.NextWorldUpdate(TrySeedWorld);
+        // One extra tick: the first world update still runs during
+        // "Host activate: Loading" when leftover controllers have bad service pointers.
+        Server.NextWorldUpdate(() => Server.NextWorldUpdate(TrySeedWorld));
     }
 
     public void OnMapEnd()
@@ -113,10 +115,19 @@ public sealed class StatsCollector
     {
         for (var i = 0; i < PlayerStatsStore.MaxPlayers; i++)
         {
-            var p = Players.FromSlot(i);
-            if (!Players.IsValid(p))
-                continue;
-            BindController(p!, occupySlot: true);
+            try
+            {
+                var p = Players.FromSlot(i);
+                if (!Players.IsConnectedOccupant(p))
+                    continue;
+                BindController(p!, occupySlot: true, scoreboard: false);
+            }
+            catch (NativeException)
+            {
+            }
+            catch
+            {
+            }
         }
     }
 
@@ -127,7 +138,7 @@ public sealed class StatsCollector
         var p = Players.FromSlot(slot);
         if (Players.IsValid(p))
         {
-            BindController(p!, occupySlot: true);
+            BindController(p!, occupySlot: true, scoreboard: false);
             return;
         }
 
@@ -141,7 +152,7 @@ public sealed class StatsCollector
         var p = Players.FromSlot(slot);
         if (!Players.IsValid(p))
             return;
-        BindController(p!, occupySlot: true);
+        BindController(p!, occupySlot: true, scoreboard: false);
     }
 
     public void OnClientDisconnect(int slot) => FreezeAndPark(slot, upload: true);
@@ -186,7 +197,7 @@ public sealed class StatsCollector
         var p = Players.FromSlot(slot);
         if (Players.IsValid(p))
         {
-            Players.Capture(p!, stats);
+            Players.Capture(p!, stats, scoreboard: false);
             Store.NoteSteam(stats);
         }
     }
@@ -717,9 +728,12 @@ public sealed class StatsCollector
                 var p = Players.FromSlot(i);
                 if (!Players.IsLiveHuman(p))
                     continue;
-                CaptureCanonical(p!, occupySlot: false);
+                CaptureCanonical(p!, occupySlot: false, scoreboard: true);
             }
             catch (NativeException)
+            {
+            }
+            catch
             {
             }
         }
@@ -737,7 +751,7 @@ public sealed class StatsCollector
             var stats = Store.Resolve(slot, isBot, steam);
             if (stats.Disconnected)
                 return null;
-            Players.Capture(player, stats);
+            Players.Capture(player, stats, scoreboard: true);
             return Store.NoteSteam(stats);
         }
         catch (NativeException)
@@ -746,12 +760,12 @@ public sealed class StatsCollector
         }
     }
 
-    private void BindController(CCSPlayerController player, bool occupySlot)
+    private void BindController(CCSPlayerController player, bool occupySlot, bool scoreboard = false)
     {
-        CaptureCanonical(player, occupySlot);
+        CaptureCanonical(player, occupySlot, scoreboard);
     }
 
-    private PlayerStats CaptureCanonical(CCSPlayerController player, bool occupySlot)
+    private PlayerStats CaptureCanonical(CCSPlayerController player, bool occupySlot, bool scoreboard)
     {
         var isBot = false;
         try { isBot = player.IsBot || player.IsHLTV; }
@@ -762,7 +776,7 @@ public sealed class StatsCollector
         var stats = occupySlot
             ? Store.Bind(slot, isBot, steam)
             : Store.Resolve(slot, isBot, steam);
-        Players.Capture(player, stats);
+        Players.Capture(player, stats, scoreboard);
         var canonical = Store.NoteSteam(stats);
         if (!isBot)
             canonical.Disconnected = false;
@@ -780,7 +794,7 @@ public sealed class StatsCollector
             var steam = steamHint != 0 ? steamHint : Players.SteamId64(player);
             var slot = player.Slot;
             var stats = Store.Resolve(slot, isBot, steam);
-            Players.Capture(player, stats);
+            Players.Capture(player, stats, scoreboard: true);
             if (steam != 0)
                 stats.SteamId = steam;
             return Store.NoteSteam(stats);
