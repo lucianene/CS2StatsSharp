@@ -1,0 +1,11 @@
+{
+  "InitCvars": {
+    "sp_enabled": true,
+    "sp_developer": false,
+    "sp_match_id": "",
+    "sp_api_round_address": "https://api-test.playcup.ro/v1/mod-stats/",
+    "sp_game_mode": "deathmatch",
+    "sp_mod": "deathmatch",
+    "sp_dm_upload_interval": 30
+  }
+}

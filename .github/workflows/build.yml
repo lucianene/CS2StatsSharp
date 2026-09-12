@@ -1,0 +1,115 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RELEASE_GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+jobs:
+  build:
+    name: Test and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Test
+        run: dotnet test CS2SP.Tests/CS2SP.Tests.csproj -c Release --nologo
+
+      - name: Publish
+        run: dotnet publish CS2SP/CS2SP.csproj -c Release -o .publish
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          dest=package/addons/counterstrikesharp
+          mkdir -p "$dest/plugins/CS2SP"
+          cp -f .publish/CS2SP.dll "$dest/plugins/CS2SP/"
+          cp -f .publish/CS2SP.Logic.dll "$dest/plugins/CS2SP/"
+          if [ -f .publish/CS2SP.deps.json ]; then
+            cp -f .publish/CS2SP.deps.json "$dest/plugins/CS2SP/"
+          fi
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            name="cs2spsharp-${GITHUB_REF_NAME}-linux"
+          else
+            name="cs2spsharp-${GITHUB_SHA::7}-linux"
+          fi
+          tar -czf "${name}.tar.gz" -C package addons
+          echo "Packed ${name}.tar.gz"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cs2spsharp-linux
+          path: cs2spsharp-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    needs: [build]
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cs2spsharp-linux
+          path: dist
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ env.RELEASE_GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          NOTES=$(printf '%s\n' \
+            'CS2StatsPlugin CounterStrikeSharp plugin.' \
+            '' \
+            'Extract the archive into `game/csgo/` so `addons/counterstrikesharp/plugins/CS2SP` lands in place.' \
+            'Do not load this together with Metamod `cs2sp.vdf`.')
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            TAG="$GITHUB_REF_NAME"
+            VERSION="${TAG#v}"
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "Release $TAG already exists"
+            else
+              gh release create "$TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                --title "CS2SP Sharp v${VERSION}" \
+                --notes "$NOTES" \
+                --verify-tag
+            fi
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" dist/* --clobber
+          else
+            TAG=latest
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release edit "$TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                --target "$GITHUB_SHA" \
+                --prerelease \
+                --title "CS2SP Sharp latest"
+            else
+              gh release create "$TAG" \
+                --repo "$GITHUB_REPOSITORY" \
+                --target "$GITHUB_SHA" \
+                --prerelease \
+                --title "CS2SP Sharp latest" \
+                --notes "$NOTES"
+            fi
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" dist/* --clobber
+          fi

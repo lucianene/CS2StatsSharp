@@ -1,0 +1,32 @@
+# Build
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+.publish/
+publish/
+artifacts/
+[Ll]og/
+[Ll]ogs/
+TestResults/
+*.dll
+*.pdb
+*.exe
+*.nupkg
+
+# IDE / local agent
+.cursor/
+.vs/
+.idea/
+*.user
+*.userosscache
+*.suo
+*.rsuser
+*.sln.docstates
+*.DotSettings.user
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
