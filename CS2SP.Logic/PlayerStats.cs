@@ -158,6 +158,68 @@ public sealed class PlayerStats
         RoundTakenHits.Clear();
     }
 
+    /// <summary>
+    /// Drop warmup (or mp_restartgame) totals. Identity stays so the live list
+    /// still has the player; the next POST is a clean match scoreboard.
+    /// </summary>
+    public void ResetMatch()
+    {
+        Money = 0;
+        ReportedRound = 0;
+        Kills = 0;
+        Deaths = 0;
+        Assists = 0;
+        Damage = 0;
+        Hits = 0;
+        Headshots = 0;
+        TeamKills = 0;
+        BombPlants = 0;
+        BombDefuses = 0;
+        BombExplodes = 0;
+        EnemiesFlashed = 0;
+        UtilityDamage = 0;
+        FireDamage = 0;
+        Dinks = 0;
+        FirstKills = 0;
+        ClutchKills = 0;
+        PistolKills = 0;
+        SniperKills = 0;
+        RifleKills = 0;
+        SmgKills = 0;
+        ShotgunKills = 0;
+        KnifeKills = 0;
+        ZeusKills = 0;
+        HeKills = 0;
+        MolotovKills = 0;
+        BlindKills = 0;
+        BombKills = 0;
+        ChickenKills = 0;
+        NoScopeKills = 0;
+        WallbangKills = 0;
+        SmokeKills = 0;
+        AirKills = 0;
+        DoubleKills = 0;
+        TripleKills = 0;
+        QuadroKills = 0;
+        PentaKills = 0;
+        FlashAssists = 0;
+        ShotsFired = 0;
+        ShotsOnTarget = 0;
+        HostageRescues = 0;
+        FlashThrown = 0;
+        HeThrown = 0;
+        SmokeThrown = 0;
+        MolotovThrown = 0;
+        DecoyThrown = 0;
+        Dominations = 0;
+        Revenges = 0;
+        TeamWipes = 0;
+        LongestKillDistance = 0;
+        Mvps = 0;
+        UniqueKills.Clear();
+        ResetRound();
+    }
+
     public void AddGiven(int victimSlot, int dmg)
     {
         RoundGivenDamage[victimSlot] = RoundGivenDamage.GetValueOrDefault(victimSlot) + dmg;
@@ -387,6 +449,24 @@ public sealed class PlayerStatsStore
         {
             if (!s.Disconnected)
                 s.ResetRound();
+        }
+    }
+
+    /// <summary>
+    /// Live humans only — a parked leaver already POSTed their snapshot.
+    /// </summary>
+    public void ResetMatchStats()
+    {
+        foreach (var s in _slots)
+        {
+            if (s is { Disconnected: false })
+                s.ResetMatch();
+        }
+
+        foreach (var s in _bySteam.Values)
+        {
+            if (!s.Disconnected)
+                s.ResetMatch();
         }
     }
 

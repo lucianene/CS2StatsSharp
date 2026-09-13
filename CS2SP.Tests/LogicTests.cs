@@ -309,6 +309,45 @@ public class PlayerStatsStoreTests
     }
 
     [Fact]
+    public void Match_reset_drops_warmup_totals_and_keeps_identity()
+    {
+        var store = new PlayerStatsStore();
+        var a = store.Bind(1, isBot: false, steam: 76561198000000001UL);
+        a.Name = "alice";
+        a.Team = 2;
+        a.Kills = 6;
+        a.Deaths = 2;
+        a.Assists = 1;
+        a.Damage = 400;
+        a.Headshots = 3;
+        a.UniqueKills.Add(76561198000000002UL);
+        a.RoundKills = 2;
+        store.ResetMatchStats();
+        Assert.Equal(0, a.Kills);
+        Assert.Equal(0, a.Deaths);
+        Assert.Equal(0, a.Damage);
+        Assert.Empty(a.UniqueKills);
+        Assert.Equal("alice", a.Name);
+        Assert.Equal(2, a.Team);
+        Assert.Equal(76561198000000001UL, a.SteamId);
+        Assert.False(a.Disconnected);
+    }
+
+    [Fact]
+    public void Match_reset_does_not_mutate_a_parked_leaver()
+    {
+        var store = new PlayerStatsStore();
+        var gone = store.Bind(1, isBot: false, steam: 76561198000000002UL);
+        gone.Kills = 9;
+        store.Disconnect(1);
+        var stay = store.Bind(2, isBot: false, steam: 76561198000000001UL);
+        stay.Kills = 4;
+        store.ResetMatchStats();
+        Assert.Equal(0, stay.Kills);
+        Assert.Equal(9, gone.Kills);
+    }
+
+    [Fact]
     public void Disconnect_keeps_scoreboard_for_upload_and_reconnect_restores_it()
     {
         var store = new PlayerStatsStore();

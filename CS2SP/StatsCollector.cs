@@ -23,6 +23,7 @@ public sealed class StatsCollector
     private int _lastMaxRounds;
     private int _storeEpoch;
     private int _queuedFrozenEpoch = -1;
+    private bool _inWarmup;
     private readonly HashSet<ulong> _pendingLeaveUpload = [];
     private CounterStrikeSharp.API.Modules.Timers.Timer? _periodicTimer;
 
@@ -61,6 +62,7 @@ public sealed class StatsCollector
     {
         _worldReady = false;
         _firstKillThisRound = false;
+        _inWarmup = false;
         _healthMap.Clear();
         _queuedFrozenEpoch = -1;
         // If OnMapEnd was skipped, POST last map's parked rows with the cached
@@ -116,6 +118,7 @@ public sealed class StatsCollector
             return;
         _worldReady = true;
         SeedConnectedPlayers();
+        _inWarmup = Players.InWarmup();
         RequestPresenceUpload();
     }
 
@@ -229,10 +232,17 @@ public sealed class StatsCollector
 
     public void OnRoundAnnounceWarmup() => RequestPresenceUpload();
 
+    public void OnWarmupEnd()
+    {
+        DiscardWarmupScoreboard(force: true);
+        RequestPresenceUpload();
+    }
+
     public void OnRoundStart()
     {
         _firstKillThisRound = false;
         _healthMap.Clear();
+        DiscardWarmupScoreboard();
         Store.ResetAllRounds();
     }
 
@@ -254,7 +264,7 @@ public sealed class StatsCollector
 
     public void OnPlayerDeath(EventPlayerDeath ev)
     {
-        if (!_cvars.Enabled.Value || !_worldReady)
+        if (!ScoringAllowed())
             return;
 
         var victim = ev.Userid;
@@ -376,7 +386,7 @@ public sealed class StatsCollector
 
     public void OnPlayerHurt(EventPlayerHurt ev)
     {
-        if (!_cvars.Enabled.Value || !_worldReady)
+        if (!ScoringAllowed())
             return;
 
         var victim = ev.Userid;
@@ -448,7 +458,7 @@ public sealed class StatsCollector
 
     public void OnPlayerBlind(EventPlayerBlind ev)
     {
-        if (!_cvars.Enabled.Value || !_worldReady)
+        if (!ScoringAllowed())
             return;
 
         var attacker = ev.Attacker;
@@ -472,7 +482,7 @@ public sealed class StatsCollector
 
     public void OnRoundMvp(CCSPlayerController? mvp)
     {
-        if (!_cvars.Enabled.Value || !_worldReady)
+        if (!ScoringAllowed())
             return;
         if (!Players.IsValid(mvp))
             return;
@@ -484,7 +494,7 @@ public sealed class StatsCollector
     public void OnBomb(string eventName, CCSPlayerController? player)
     {
         // Metamod counted bomb events even when sp_enabled was 0.
-        if (!_worldReady)
+        if (!_worldReady || Players.InWarmup())
             return;
         if (!Players.IsValid(player))
             return;
@@ -501,7 +511,7 @@ public sealed class StatsCollector
 
     public void OnChickenDeath(EventOtherDeath ev)
     {
-        if (!_cvars.Enabled.Value || !_worldReady)
+        if (!ScoringAllowed())
             return;
         var kind = ev.Othertype;
         if (string.IsNullOrEmpty(kind))
@@ -519,7 +529,7 @@ public sealed class StatsCollector
 
     public void OnGrenadeThrown(EventGrenadeThrown ev)
     {
-        if (!_cvars.Enabled.Value || !_worldReady)
+        if (!ScoringAllowed())
             return;
         var player = ev.Userid;
         if (!Players.IsValid(player))
@@ -531,7 +541,7 @@ public sealed class StatsCollector
 
     public void OnHostageRescued(CCSPlayerController? player)
     {
-        if (!_cvars.Enabled.Value || !_worldReady)
+        if (!ScoringAllowed())
             return;
         if (!Players.IsValid(player))
             return;
@@ -546,10 +556,14 @@ public sealed class StatsCollector
             return;
         if (ev.Reason == RoundEndReasons.GameStart)
         {
+            DiscardWarmupScoreboard(force: true);
             RequestPresenceUpload();
             return;
         }
         if (!_worldReady)
+            return;
+        DiscardWarmupScoreboard();
+        if (Players.InWarmup())
             return;
         Upload(ev.Winner, reason: "round");
     }
@@ -594,6 +608,9 @@ public sealed class StatsCollector
         }
 
         if (!_worldReady)
+            return;
+        DiscardWarmupScoreboard();
+        if (Players.InWarmup())
             return;
         if (!Clock.TryFire(now, _cvars.DmInterval.Value))
             return;
@@ -645,6 +662,26 @@ public sealed class StatsCollector
         foreach (var _ in Store.HumansForUpload())
             return true;
         return false;
+    }
+
+    private bool ScoringAllowed() =>
+        _cvars.Enabled.Value && _worldReady && !Players.InWarmup();
+
+    /// <summary>
+    /// Warmup kills must not sit on the match row. Skip events while
+    /// WarmupPeriod is set, and wipe live totals when it ends (or on GameStart).
+    /// </summary>
+    private void DiscardWarmupScoreboard(bool force = false)
+    {
+        var warmup = Players.InWarmup();
+        if (force || (_inWarmup && !warmup))
+        {
+            Store.ResetMatchStats();
+            _firstKillThisRound = false;
+            _healthMap.Clear();
+        }
+
+        _inWarmup = warmup;
     }
 
     private void Upload(int winner, bool requireWorld = true, bool captureLive = true, bool refreshMeta = true, string reason = "")

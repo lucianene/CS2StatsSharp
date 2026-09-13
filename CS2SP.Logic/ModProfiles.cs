@@ -5,9 +5,10 @@ namespace CS2SP.Logic;
 /// names fall back to the first row (matchmaking). Uploads are not gated
 /// here: every mod POSTs on the periodic timer, on <c>round_end</c> when
 /// the engine fires it, and on a coalesced connect/warmup presence heartbeat
-/// so the web live list refreshes before the first scored round. Round /
-/// connect / leave POSTs reset the periodic clock so they do not stack.
-/// A leaver is POSTed once (frozen mid-round kills), then omitted.
+/// so the web live list refreshes before the first scored round. Warmup
+/// itself is not scored. Round / connect / leave POSTs reset the periodic
+/// clock so they do not stack. A leaver is POSTed once (frozen mid-round
+/// kills), then omitted.
 /// </summary>
 public readonly record struct ModProfile(
     string Name,

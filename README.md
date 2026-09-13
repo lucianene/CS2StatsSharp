@@ -53,6 +53,8 @@ game/csgo/addons/counterstrikesharp/plugins/CS2SP/CS2SP.Logic.dll
 
 Joins, `player_connect_full`, `round_announce_warmup`, and the GameStart `round_end` (warmup commencing) share a **presence** POST (`match.reason=connect`, 1s settle, 5s min interval). That is what refreshes the web live list and “Playing DM / Aim / …” activity during warmup, before the first scored round. The API skips mission credit on `connect`. Connect payloads are the same event-total object as every other POST.
 
+Warmup is not scored. Kills/damage/utility during `WarmupPeriod` are ignored, and live totals are wiped on `warmup_end` / GameStart so they cannot stack into the match row. Periodic and round POSTs wait until warmup ends. Leave POSTs still run (live list).
+
 A player who leaves is POSTed once (`match.reason=disconnect`, `left: true`) so mid-round kills land, then omitted from later heartbeats. The API stamps `left_at` so they drop off the live list immediately. Map-end still flushes remaining parked rows.
 
 String FakeConVars (`sp_mod`, `sp_game_mode`, `sp_api_round_address`, `sp_server_id`, `sp_match_id`) must have **nothing after the closing quote** on the cfg line. A trailing `// comment` is stored as part of the value and breaks the POST URL.

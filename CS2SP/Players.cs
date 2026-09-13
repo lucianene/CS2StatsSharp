@@ -291,6 +291,27 @@ public static class Players
             return null;
         }
     }
+
+    /// <summary>
+    /// Valve warmup period. Fail closed to "not warmup" if gamerules are
+    /// missing so deathmatch after a 0s warmup still scores.
+    /// </summary>
+    public static bool InWarmup()
+    {
+        try
+        {
+            var rules = GameRules();
+            return rules is not null && rules.WarmupPeriod;
+        }
+        catch (NativeException)
+        {
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 }
 
 public static class EngineCvars
