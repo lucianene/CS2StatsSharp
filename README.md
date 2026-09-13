@@ -59,12 +59,12 @@ Unknown `sp_mod` values fall back to matchmaking. PlayCup `sp_mod` values: `deat
 
 ## Stats captured
 
-Core scoreboard (events + engine MatchStats, never shrunk on disconnect): K/D/A, damage, hits, HS%, ADR, MVPs, team kills, money.
+Core scoreboard (event totals, never shrunk on disconnect): K/D/A, damage, hits, HS%, ADR, MVPs, team kills. Money is not read from the engine.
 
 Kill flavor (`player_death`): first/clutch, 2/3/4/5k, pistol/rifle/smg/shotgun/sniper/knife/zeus/HE/molotov/bomb, noscope, wallbang, through-smoke, air, blind, unique victims, chicken, longest distance (m), dominations, revenges, team wipes.
 
 Utility: flash/HE/smoke/molotov/decoy thrown, flash assists, enemies flashed, utility/fire damage, dinks. Casual hostage maps: rescues.
 
-Accuracy: event hits vs shots when those counters are present. Engine `CSMatchStats_t` extras are not read (raw schema refs can abort srcds).
+Accuracy: event hits vs shots when those counters are present. Engine `ActionTrackingServices` / `InGameMoneyServices` are never read — they are raw heap pointers, and `Schema.GetRef` `AccessViolationException` aborts srcds (uncaught in .NET 8) on sign-on, kick, and round reset leftovers.
 
 New keys need a `mod_player_stats` column + `ModPlayerStats` fillable. Do **not** add them to `match_player_stats` unless CS2MM also sends them.

@@ -734,7 +734,9 @@ public sealed class StatsCollector
                 var p = Players.FromSlot(i);
                 if (!Players.IsLiveHuman(p))
                     continue;
-                CaptureCanonical(p!, occupySlot: false, scoreboard: true);
+                // Identity only. Engine MatchStats/money are raw pointers and
+                // AV during sign-on, kick, and round reset.
+                CaptureCanonical(p!, occupySlot: false, scoreboard: false);
             }
             catch (NativeException)
             {
@@ -749,6 +751,8 @@ public sealed class StatsCollector
     {
         try
         {
+            if (!Players.IsController(player))
+                return null;
             var slot = player.Slot;
             if ((uint)slot >= PlayerStatsStore.MaxPlayers)
                 return null;
@@ -757,10 +761,14 @@ public sealed class StatsCollector
             var stats = Store.Resolve(slot, isBot, steam);
             if (stats.Disconnected)
                 return null;
-            Players.Capture(player, stats, scoreboard: true);
+            Players.Capture(player, stats, scoreboard: false);
             return Store.NoteSteam(stats);
         }
         catch (NativeException)
+        {
+            return null;
+        }
+        catch
         {
             return null;
         }
@@ -773,14 +781,31 @@ public sealed class StatsCollector
 
     private PlayerStats CaptureCanonical(CCSPlayerController player, bool occupySlot, bool scoreboard)
     {
+        if (!Players.IsController(player))
+            return new PlayerStats { IsBot = true, Disconnected = true };
+
         var isBot = true;
-        try { isBot = player.IsBot || player.IsHLTV; }
-        catch (NativeException) { /* fail closed: do not index as a human */ }
+        var slot = -1;
+        try
+        {
+            isBot = player.IsBot || player.IsHLTV;
+            slot = player.Slot;
+        }
+        catch (NativeException)
+        {
+            return new PlayerStats { IsBot = true, Disconnected = true };
+        }
+        catch
+        {
+            return new PlayerStats { IsBot = true, Disconnected = true };
+        }
+
+        if ((uint)slot >= PlayerStatsStore.MaxPlayers)
+            return new PlayerStats { Slot = slot, IsBot = true, Disconnected = true };
 
         var steam = Players.SteamId64(player);
         if (isBot)
             steam = 0;
-        var slot = player.Slot;
         var stats = occupySlot
             ? Store.Bind(slot, isBot, steam)
             : Store.Resolve(slot, isBot, steam);
@@ -795,6 +820,9 @@ public sealed class StatsCollector
     {
         try
         {
+            if (!Players.IsController(player))
+                return null;
+
             var isBot = true;
             try { isBot = player.IsBot || player.IsHLTV; }
             catch (NativeException) { }
@@ -803,13 +831,19 @@ public sealed class StatsCollector
             if (isBot || !SteamIds.IsIndividual(steam))
                 steam = 0;
             var slot = player.Slot;
+            if ((uint)slot >= PlayerStatsStore.MaxPlayers)
+                return null;
             var stats = Store.Resolve(slot, isBot, steam);
-            Players.Capture(player, stats, scoreboard: true);
+            Players.Capture(player, stats, scoreboard: false);
             if (steam != 0)
                 stats.SteamId = steam;
             return Store.NoteSteam(stats);
         }
         catch (NativeException)
+        {
+            return null;
+        }
+        catch
         {
             return null;
         }

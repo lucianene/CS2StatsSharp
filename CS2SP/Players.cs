@@ -8,15 +8,47 @@ namespace CS2SP;
 
 public static class Players
 {
-    public static bool IsValid(CCSPlayerController? p)
+    /// <summary>
+    /// CSS <c>GetPlayerFromSlot</c> wraps whatever lives at slot+1. World /
+    /// gamerules / leftover ents occupy that index during levelload and round
+    /// reset — schema reads on the wrong class AV the process. Same gate as
+    /// C++ <c>CCSPlayerController::FromSlot</c>.
+    /// </summary>
+    public static bool IsController(CCSPlayerController? p)
     {
         if (p is null)
             return false;
         try
         {
-            return p.IsValid && !p.IsHLTV;
+            if (p.Handle == IntPtr.Zero || !p.IsValid)
+                return false;
+            var name = p.DesignerName;
+            return name is not null
+                && name.Equals("cs_player_controller", StringComparison.Ordinal);
         }
         catch (NativeException)
+        {
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static bool IsValid(CCSPlayerController? p)
+    {
+        if (!IsController(p))
+            return false;
+        try
+        {
+            return !p!.IsHLTV;
+        }
+        catch (NativeException)
+        {
+            return false;
+        }
+        catch
         {
             return false;
         }
@@ -34,12 +66,17 @@ public static class Players
         {
             return false;
         }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>
     /// Still in the session. After <c>OnClientDisconnect</c> the controller can
     /// linger as Disconnecting/Disconnected with a zeroed scoreboard — do not
-    /// walk those on periodic/round POSTs.
+    /// walk those on periodic/round POSTs. Fail closed: a native error here
+    /// used to walk leftovers whose service pointers abort srcds.
     /// </summary>
     public static bool IsLiveHuman(CCSPlayerController? p)
     {
@@ -47,11 +84,16 @@ public static class Players
             return false;
         try
         {
-            return p!.Connected == PlayerConnectedState.PlayerConnected;
+            return p!.Connected == PlayerConnectedState.PlayerConnected
+                && p.EverFullyConnected;
         }
         catch (NativeException)
         {
-            return true;
+            return false;
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -84,9 +126,14 @@ public static class Players
     {
         try
         {
-            return Utilities.GetPlayerFromSlot(slot);
+            var p = Utilities.GetPlayerFromSlot(slot);
+            return IsController(p) ? p : null;
         }
         catch (NativeException)
+        {
+            return null;
+        }
+        catch
         {
             return null;
         }
@@ -96,9 +143,14 @@ public static class Players
     {
         try
         {
-            return Utilities.GetPlayerFromUserid(userid);
+            var p = Utilities.GetPlayerFromUserid(userid);
+            return IsController(p) ? p : null;
         }
         catch (NativeException)
+        {
+            return null;
+        }
+        catch
         {
             return null;
         }
@@ -165,7 +217,8 @@ public static class Players
         try
         {
             return p!.Handle != IntPtr.Zero
-                && p.Connected == PlayerConnectedState.PlayerConnected;
+                && p.Connected == PlayerConnectedState.PlayerConnected
+                && p.EverFullyConnected;
         }
         catch (NativeException)
         {
@@ -178,17 +231,21 @@ public static class Players
     }
 
     /// <summary>
-    /// Freeze identity (always) and optionally the engine scoreboard into
-    /// <paramref name="stats"/>. Scoreboard reads <c>CSPerRoundStats_t</c> only
-    /// — extra <c>CSMatchStats_t</c> fields are raw <c>Schema.GetRef</c> and
-    /// AccessViolation abort the process if the pointer or offset is wrong.
-    /// Skip scoreboard during map-load seed; leftover controllers are not ready.
+    /// Freeze identity into <paramref name="stats"/>. Do not follow
+    /// <c>m_pActionTrackingServices</c> / <c>m_pInGameMoneyServices</c> — those
+    /// are raw heap pointers, not CHandles. A non-null leftover during sign-on,
+    /// kick, or <c>OnPreResetRound</c> makes <c>Schema.GetRef</c>
+    /// <c>AccessViolationException</c>, which .NET 8 cannot catch and which
+    /// aborts srcds. Event totals already cover K/D/A/damage; skip engine
+    /// money/scoreboard. <paramref name="scoreboard"/> is kept for call-site
+    /// compatibility and is ignored.
     /// </summary>
     public static void Capture(CCSPlayerController player, PlayerStats stats, bool scoreboard = true)
     {
+        _ = scoreboard;
         try
         {
-            if (player.Handle == IntPtr.Zero)
+            if (player.Handle == IntPtr.Zero || !IsController(player))
                 return;
         }
         catch
@@ -201,6 +258,9 @@ public static class Players
             stats.IsBot = player.IsBot || player.IsHLTV;
         }
         catch (NativeException)
+        {
+        }
+        catch
         {
         }
 
@@ -217,49 +277,6 @@ public static class Players
             team = (int)ControllerTeam(player);
         if (team != 0)
             stats.Team = team;
-
-        if (!scoreboard)
-            return;
-
-        try
-        {
-            var money = player.InGameMoneyServices;
-            if (money is not null && money.Handle != IntPtr.Zero)
-                stats.Money = money.Account;
-        }
-        catch (NativeException)
-        {
-        }
-        catch
-        {
-        }
-
-        try
-        {
-            var tracking = player.ActionTrackingServices;
-            if (tracking is null || tracking.Handle == IntPtr.Zero)
-                return;
-            var match = tracking.MatchStats;
-            if (match.Handle == IntPtr.Zero)
-                return;
-            // Copy primitives immediately. GetRef is a raw pointer add — a
-            // dangling leftover controller during levelload AVs here.
-            ScoreboardMerge.Apply(
-                stats,
-                match.Kills,
-                match.Deaths,
-                match.Assists,
-                match.Damage,
-                match.HeadShotKills,
-                match.UtilityDamage,
-                match.EnemiesFlashed);
-        }
-        catch (NativeException)
-        {
-        }
-        catch
-        {
-        }
     }
 
     public static CCSGameRules? GameRules()
