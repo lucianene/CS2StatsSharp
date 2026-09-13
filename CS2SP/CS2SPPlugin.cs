@@ -80,6 +80,14 @@ public sealed partial class CS2SPPlugin : BasePlugin
         Safe("round_end", () => Stats.OnRoundEnd(ev));
 
     [GameEventHandler]
+    public HookResult OnRoundAnnounceWarmup(EventRoundAnnounceWarmup _, GameEventInfo _info) =>
+        Safe("round_announce_warmup", Stats.OnRoundAnnounceWarmup);
+
+    [GameEventHandler]
+    public HookResult OnPlayerConnectFull(EventPlayerConnectFull ev, GameEventInfo _info) =>
+        Safe("player_connect_full", () => Stats.OnPlayerConnectFull(ev.Userid));
+
+    [GameEventHandler]
     public HookResult OnPlayerSpawn(EventPlayerSpawn ev, GameEventInfo _info) =>
         Safe("player_spawn", () => Stats.OnPlayerSpawn(ev.Userid));
 

@@ -320,13 +320,15 @@ public class PlayerStatsStoreTests
         a.Team = 3;
         store.Disconnect(2);
         Assert.Null(store.Get(2));
-        var parked = Assert.Single(store.HumansForUpload());
+        Assert.Empty(store.HumansForUpload());
+        var parked = Assert.Single(store.HumansForUpload(includeDisconnected: true));
         Assert.Equal(8, parked.Kills);
         Assert.True(parked.Disconnected);
 
         var bot = store.Bind(2, isBot: true);
         Assert.True(bot.IsBot);
-        Assert.Equal(8, Assert.Single(store.HumansForUpload()).Kills);
+        Assert.Empty(store.HumansForUpload());
+        Assert.Equal(8, Assert.Single(store.HumansForUpload(includeDisconnected: true)).Kills);
 
         var back = store.Bind(5, isBot: false, steam: 76561198000000001UL);
         Assert.Same(parked, back);
@@ -399,7 +401,8 @@ public class PlayerStatsStoreTests
         Assert.Equal(4, canonical.Assists);
         Assert.Equal(250, canonical.Damage);
         Assert.Equal("bob", canonical.Name);
-        Assert.Equal(7, Assert.Single(store.HumansForUpload()).Kills);
+        Assert.Empty(store.HumansForUpload());
+        Assert.Equal(7, Assert.Single(store.HumansForUpload(includeDisconnected: true)).Kills);
     }
 
     [Fact]
@@ -428,6 +431,19 @@ public class PlayerStatsStoreTests
         var human = store.Bind(3, isBot: false, steam: 76561198000000002UL);
         human.Kills = 9;
         Assert.Equal(9, Assert.Single(store.HumansForUpload()).Kills);
+    }
+
+    [Fact]
+    public void HumansForUpload_omits_disconnected_until_asked()
+    {
+        var store = new PlayerStatsStore();
+        var stay = store.Bind(1, isBot: false, steam: 76561198000000001UL);
+        stay.Kills = 2;
+        var gone = store.Bind(2, isBot: false, steam: 76561198000000002UL);
+        gone.Kills = 9;
+        store.Disconnect(2);
+        Assert.Equal(2, Assert.Single(store.HumansForUpload()).Kills);
+        Assert.Equal(2, store.HumansForUpload(includeDisconnected: true).Count());
     }
 
     [Fact]
@@ -549,6 +565,7 @@ public class StatsPayloadTests
         Assert.Equal("cs2", body!["game"]!.GetValue<string>());
         Assert.Equal("de_mirage", body["match"]!["map"]!.GetValue<string>());
         Assert.Equal(24, body["match"]!["max_rounds"]!.GetValue<int>());
+        Assert.Equal("", body["match"]!["reason"]!.GetValue<string>());
 
         var row = body["stats"]!["76561198000000001"]!.AsObject();
         Assert.Equal("76561198000000001", row["steam_id"]!.GetValue<string>());
@@ -564,6 +581,24 @@ public class StatsPayloadTests
         Assert.Equal(2.5f, row["kdr"]!.GetValue<float>(), 3);
         Assert.Equal(1, row["noscope_kills"]!.GetValue<int>());
         Assert.Equal(40f, row["accuracy"]!.GetValue<float>(), 3);
+        Assert.False(row.ContainsKey("left"));
+    }
+
+    [Fact]
+    public void Connect_reason_is_on_the_match_object()
+    {
+        var body = StatsPayload.Build(
+        [
+            new PlayerUpload
+            {
+                SteamId = "76561198000000001",
+                Stats = new PlayerStats(),
+                Assists = 0,
+                TotalDamage = 0,
+                Money = 0
+            }
+        ], "aim_redline", 0, "connect");
+        Assert.Equal("connect", body!["match"]!["reason"]!.GetValue<string>());
     }
 
     [Fact]
@@ -604,6 +639,22 @@ public class StatsPayloadTests
         Assert.Equal(100f, row["adr"]!.GetValue<float>(), 3);
         Assert.False(row["round_win"]!.GetValue<bool>());
         Assert.Equal(400, row["total_damage"]!.GetValue<int>());
+        Assert.False(row.ContainsKey("left"));
+    }
+
+    [Fact]
+    public void Leaver_payload_sets_left()
+    {
+        var row = StatsPayload.ToPlayerObject(new PlayerUpload
+        {
+            SteamId = "76561198000000001",
+            Stats = new PlayerStats { Disconnected = true },
+            Assists = 0,
+            TotalDamage = 0,
+            Money = 0,
+            Left = true
+        });
+        Assert.True(row["left"]!.GetValue<bool>());
     }
 }
 
@@ -706,6 +757,63 @@ public class PeriodicClockTests
         Assert.False(clock.TryFire(0f, 0.1f));
         Assert.False(clock.TryFire(0.5f, 0.1f));
         Assert.True(clock.TryFire(1.0f, 0.1f));
+    }
+
+    [Fact]
+    public void NoteFire_delays_the_next_periodic_tick()
+    {
+        var clock = new PeriodicClock();
+        Assert.False(clock.TryFire(10f, 30f));
+        clock.NoteFire(20f);
+        Assert.False(clock.TryFire(40f, 30f));
+        Assert.True(clock.TryFire(50.1f, 30f));
+    }
+
+    [Fact]
+    public void TryFire_zero_after_a_real_last_fire_rearms_like_curtime_reset()
+    {
+        var clock = new PeriodicClock();
+        Assert.False(clock.TryFire(100f, 30f));
+        Assert.False(clock.TryFire(0f, 30f));
+        Assert.Equal(0f, clock.LastFire);
+        Assert.False(clock.TryFire(20f, 30f));
+        Assert.True(clock.TryFire(30.1f, 30f));
+    }
+}
+
+public class PresenceClockTests
+{
+    [Fact]
+    public void Settles_one_second_and_coalesces_join_bursts()
+    {
+        var clock = new PresenceClock();
+        clock.Request(10f);
+        Assert.True(clock.Pending);
+        Assert.Equal(11f, clock.DueAt);
+        Assert.False(clock.TryFire(10.5f));
+        Assert.True(clock.TryFire(11f));
+        Assert.False(clock.Pending);
+
+        clock.NoteUpload(11f);
+        clock.Request(11.2f);
+        clock.Request(12f);
+        Assert.Equal(16f, clock.DueAt);
+        Assert.False(clock.TryFire(15.9f));
+        Assert.True(clock.TryFire(16f));
+    }
+
+    [Fact]
+    public void Reset_clears_pending_and_last_upload()
+    {
+        var clock = new PresenceClock();
+        clock.Request(5f);
+        clock.TryFire(6f);
+        clock.NoteUpload(6f);
+        clock.Reset();
+        Assert.False(clock.Pending);
+        Assert.Equal(-1f, clock.LastUpload);
+        clock.Request(0f);
+        Assert.Equal(PresenceClock.Delay, clock.DueAt);
     }
 }
 

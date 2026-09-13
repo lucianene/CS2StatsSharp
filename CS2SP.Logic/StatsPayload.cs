@@ -14,13 +14,18 @@ public sealed class PlayerUpload
     public int Assists { get; init; }
     public int TotalDamage { get; init; }
     public int Money { get; init; }
+    public bool Left { get; init; }
 }
 
 public static class StatsPayload
 {
     public const string Game = "cs2";
 
-    public static JsonObject? Build(IReadOnlyList<PlayerUpload> players, string mapName, int maxRounds)
+    public static JsonObject? Build(
+        IReadOnlyList<PlayerUpload> players,
+        string mapName,
+        int maxRounds,
+        string reason = "")
     {
         if (players.Count == 0)
             return null;
@@ -35,7 +40,8 @@ public static class StatsPayload
             ["match"] = new JsonObject
             {
                 ["map"] = mapName,
-                ["max_rounds"] = maxRounds
+                ["max_rounds"] = maxRounds,
+                ["reason"] = reason ?? ""
             },
             ["game"] = Game
         };
@@ -45,7 +51,7 @@ public static class StatsPayload
     {
         var s = p.Stats;
         var round = p.Round;
-        return new JsonObject
+        var obj = new JsonObject
         {
             ["steam_id"] = p.SteamId,
             ["name"] = p.Name,
@@ -108,6 +114,9 @@ public static class StatsPayload
             ["longest_kill_distance"] = s.LongestKillDistance,
             ["money"] = p.Money
         };
+        if (p.Left)
+            obj["left"] = true;
+        return obj;
     }
 
     public static string SteamKey(ulong steamId) =>

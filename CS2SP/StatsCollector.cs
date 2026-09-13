@@ -23,10 +23,12 @@ public sealed class StatsCollector
     private int _lastMaxRounds;
     private int _storeEpoch;
     private int _queuedFrozenEpoch = -1;
+    private readonly HashSet<ulong> _pendingLeaveUpload = [];
     private CounterStrikeSharp.API.Modules.Timers.Timer? _periodicTimer;
 
     public PlayerStatsStore Store { get; } = new();
     public PeriodicClock Clock { get; } = new();
+    public PresenceClock Presence { get; } = new();
 
     public StatsCollector(BasePlugin plugin, SpConVars cvars, PlaycupApiClient api, ILogger log)
     {
@@ -60,11 +62,13 @@ public sealed class StatsCollector
         _worldReady = false;
         _firstKillThisRound = false;
         _healthMap.Clear();
-        Clock.Reset();
         _queuedFrozenEpoch = -1;
         // If OnMapEnd was skipped, POST last map's parked rows with the cached
         // map name before wiping. Duplicate of OnMapEnd is idempotent.
-        Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: false);
+        Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: false, reason: "map");
+        _pendingLeaveUpload.Clear();
+        Clock.Reset();
+        Presence.Reset();
         _storeEpoch++;
         Store.Clear();
         // One extra tick: the first world update still runs during
@@ -76,11 +80,13 @@ public sealed class StatsCollector
     {
         _worldReady = false;
         Clock.Reset();
+        Presence.Reset();
         _queuedFrozenEpoch = -1;
         // Entity list is dying. POST parked steam snapshots with the *cached*
         // map/round so a leaver is not labeled as the next map, then OnMapStart
         // can Clear.
-        Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: false);
+        Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: false, reason: "map");
+        _pendingLeaveUpload.Clear();
     }
 
     public void OnUnload()
@@ -88,7 +94,8 @@ public sealed class StatsCollector
         _queuedFrozenEpoch = -1;
         try
         {
-            Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: false);
+            Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: false, reason: "map");
+            _pendingLeaveUpload.Clear();
         }
         catch
         {
@@ -109,6 +116,7 @@ public sealed class StatsCollector
             return;
         _worldReady = true;
         SeedConnectedPlayers();
+        RequestPresenceUpload();
     }
 
     public void SeedConnectedPlayers()
@@ -139,6 +147,7 @@ public sealed class StatsCollector
         if (Players.IsHuman(p))
         {
             BindController(p!, occupySlot: true, scoreboard: false);
+            RequestPresenceUpload();
             return;
         }
 
@@ -153,6 +162,7 @@ public sealed class StatsCollector
         if (!Players.IsHuman(p))
             return;
         BindController(p!, occupySlot: true, scoreboard: false);
+        RequestPresenceUpload();
     }
 
     public void OnClientDisconnect(int slot) => FreezeAndPark(slot, upload: true);
@@ -206,7 +216,18 @@ public sealed class StatsCollector
             Players.Capture(p!, stats, scoreboard: false);
             Store.NoteSteam(stats);
         }
+        RequestPresenceUpload();
     }
+
+    public void OnPlayerConnectFull(CCSPlayerController? player)
+    {
+        if (!Players.IsHuman(player))
+            return;
+        BindController(player!, occupySlot: true, scoreboard: false);
+        RequestPresenceUpload();
+    }
+
+    public void OnRoundAnnounceWarmup() => RequestPresenceUpload();
 
     public void OnRoundStart()
     {
@@ -521,25 +542,62 @@ public sealed class StatsCollector
 
     public void OnRoundEnd(EventRoundEnd ev)
     {
-        if (!_cvars.Enabled.Value || !_worldReady)
+        if (!_cvars.Enabled.Value)
             return;
         if (ev.Reason == RoundEndReasons.GameStart)
+        {
+            RequestPresenceUpload();
             return;
-        Upload(ev.Winner);
+        }
+        if (!_worldReady)
+            return;
+        Upload(ev.Winner, reason: "round");
     }
 
     public void OnPeriodicTick()
     {
         if (_stopped || !_cvars.Enabled.Value)
             return;
-        if (!_worldReady)
+
+        float now;
+        try { now = Server.CurrentTime; }
+        catch
         {
-            TrySeedWorld();
+            // TryFire(0) while LastFire is a real curtime rearms the clock and
+            // the next tick stacks a heartbeat. Leave POSTs do not need curtime.
+            if (!_worldReady)
+                TrySeedWorld();
+            if (_pendingLeaveUpload.Count > 0)
+                Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: true, reason: "disconnect");
             return;
         }
-        if (!Clock.TryFire(Server.CurrentTime, _cvars.DmInterval.Value))
+
+        if (!_worldReady)
+            TrySeedWorld();
+
+        if (Presence.TryFire(now))
+        {
+            if (!HasHumansForUpload())
+                Presence.Request(now);
+            else
+            {
+                Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: true, reason: "connect");
+                return;
+            }
+        }
+
+        // Backup if NextWorldUpdate never ran (map change / world teardown).
+        if (_pendingLeaveUpload.Count > 0)
+        {
+            Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: true, reason: "disconnect");
             return;
-        Upload(winner: -1);
+        }
+
+        if (!_worldReady)
+            return;
+        if (!Clock.TryFire(now, _cvars.DmInterval.Value))
+            return;
+        Upload(winner: -1, reason: "periodic");
     }
 
     public void ForceUpload()
@@ -561,10 +619,35 @@ public sealed class StatsCollector
         }
 
         _log.LogInformation("[CS2SP] sp_send_stats: forcing stats upload...");
-        Upload(winner: -1);
+        Upload(winner: -1, reason: "periodic");
     }
 
-    private void Upload(int winner, bool requireWorld = true, bool captureLive = true, bool refreshMeta = true)
+    /// <summary>
+    /// C++ <c>SP_RequestPresenceUpload</c>. Join bursts and warmup share one
+    /// POST so the web live list / activity refresh before the first scored round.
+    /// </summary>
+    public void RequestPresenceUpload()
+    {
+        if (_stopped || !_cvars.Enabled.Value)
+            return;
+        try
+        {
+            Presence.Request(Server.CurrentTime);
+        }
+        catch
+        {
+            Presence.Request(0f);
+        }
+    }
+
+    private bool HasHumansForUpload()
+    {
+        foreach (var _ in Store.HumansForUpload())
+            return true;
+        return false;
+    }
+
+    private void Upload(int winner, bool requireWorld = true, bool captureLive = true, bool refreshMeta = true, string reason = "")
     {
         if (_stopped)
             return;
@@ -589,7 +672,7 @@ public sealed class StatsCollector
         var sent = false;
         try
         {
-            sent = TryPost(winner, captureLive, refreshMeta, releaseBusy: tookBusy);
+            sent = TryPost(winner, captureLive, refreshMeta, releaseBusy: tookBusy, reason);
         }
         catch (NativeException)
         {
@@ -607,7 +690,7 @@ public sealed class StatsCollector
         }
     }
 
-    private bool TryPost(int winner, bool captureLive, bool refreshMeta, bool releaseBusy)
+    private bool TryPost(int winner, bool captureLive, bool refreshMeta, bool releaseBusy, string reason)
     {
         var apiAddress = _cvars.ApiAddressText;
         if (!UploadUrl.IsConfigured(apiAddress))
@@ -615,6 +698,12 @@ public sealed class StatsCollector
             _log.LogInformation("[CS2SP] Skipping stats upload: sp_api_round_address is empty (set it in server.cfg).");
             return false;
         }
+
+        // Map-end clears pending then a queued NextWorldUpdate can still run.
+        // An empty leave queue would POST only the remaining live roster as
+        // reason=disconnect and look like a stacked heartbeat.
+        if (reason == "disconnect" && _pendingLeaveUpload.Count == 0)
+            return false;
 
         var roundNumber = _lastRoundNumber;
         var maxRounds = _lastMaxRounds;
@@ -634,7 +723,7 @@ public sealed class StatsCollector
 
         var uploads = new List<PlayerUpload>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var stats in Store.HumansForUpload())
+        foreach (var stats in RosterForReason(reason))
         {
             var key = StatsPayload.SteamKey(stats.SteamId);
             if (!seen.Add(key))
@@ -649,11 +738,37 @@ public sealed class StatsCollector
                 Stats = stats,
                 Assists = stats.Assists,
                 TotalDamage = stats.Damage,
-                Money = stats.Money
+                Money = stats.Money,
+                Left = stats.Disconnected
             });
         }
 
-        var body = StatsPayload.Build(uploads, mapName, maxRounds);
+        // Round / periodic / connect can overlap a leave. Drop anyone who parked
+        // after the snapshot so a stale body without `left` cannot clear left_at.
+        if (reason is not "disconnect" and not "map")
+            uploads.RemoveAll(u => u.Stats.Disconnected);
+
+        if (reason == "disconnect")
+        {
+            var anyLeft = false;
+            foreach (var u in uploads)
+            {
+                if (!u.Left)
+                    continue;
+                anyLeft = true;
+                break;
+            }
+
+            // Reconnect (same object is live again) or a wiped store: nothing
+            // to stamp. Drop the queue so the 1s backup does not spin.
+            if (!anyLeft)
+            {
+                _pendingLeaveUpload.Clear();
+                return false;
+            }
+        }
+
+        var body = StatsPayload.Build(uploads, mapName, maxRounds, reason);
         if (body is null)
             return false;
 
@@ -677,11 +792,12 @@ public sealed class StatsCollector
         }
 
         _log.LogInformation(
-            "[CS2SP] Sending stats for {Count} player(s) (mod={Mod}, map={Map}, round={Round})",
+            "[CS2SP] Sending stats for {Count} player(s) (mod={Mod}, map={Map}, round={Round}, reason={Reason})",
             uploads.Count,
             string.IsNullOrEmpty(mod) ? "?" : mod,
             mapName,
-            roundNumber);
+            roundNumber,
+            string.IsNullOrEmpty(reason) ? "?" : reason);
 
         _api.Post(uri,
             json,
@@ -697,7 +813,50 @@ public sealed class StatsCollector
                 if (releaseBusy)
                     Interlocked.Exchange(ref _uploadBusy, 0);
             });
+        // Only drop the leave queue after we actually built a disconnect/map
+        // body. HTTP is async with a retry; map-end still flushes parked rows
+        // if this POST never lands.
+        if (reason is "disconnect" or "map")
+            _pendingLeaveUpload.Clear();
+        NoteClocks();
         return true;
+    }
+
+    /// <summary>
+    /// Live humans for heartbeats. Map-end includes parked rows (marked
+    /// <c>left</c>). A disconnect POST is live humans plus the steam IDs
+    /// queued since the last leave flush — not every leaver this map.
+    /// </summary>
+    private IEnumerable<PlayerStats> RosterForReason(string reason)
+    {
+        var includeDisconnected = reason == "map";
+        foreach (var stats in Store.HumansForUpload(includeDisconnected))
+            yield return stats;
+
+        if (reason != "disconnect")
+            yield break;
+
+        foreach (var steam in _pendingLeaveUpload)
+        {
+            var parked = Store.GetBySteam(steam);
+            if (parked is { IsBot: false } && SteamIds.IsIndividual(parked.SteamId))
+                yield return parked;
+        }
+    }
+
+    private void NoteClocks()
+    {
+        try
+        {
+            var now = Server.CurrentTime;
+            Presence.NoteUpload(now);
+            Clock.NoteFire(now);
+        }
+        catch
+        {
+            // Leave LastFire / LastUpload alone. NoteFire(0) / NoteUpload(0)
+            // would make the next real curtime look overdue and stack a POST.
+        }
     }
 
     private void RefreshMatchMeta(ref int roundNumber, ref int maxRounds, ref string mapName)
@@ -861,7 +1020,10 @@ public sealed class StatsCollector
 
         Store.Disconnect(slot);
         if (upload && stats is { IsBot: false } && SteamIds.IsIndividual(stats.SteamId))
+        {
+            _pendingLeaveUpload.Add(stats.SteamId);
             QueueFrozenUpload();
+        }
     }
 
     private void QueueFrozenUpload()
@@ -877,13 +1039,17 @@ public sealed class StatsCollector
                 if (_storeEpoch != epoch)
                     return;
                 _queuedFrozenEpoch = -1;
-                Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: true);
+                if (_pendingLeaveUpload.Count == 0)
+                    return;
+                Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: true, reason: "disconnect");
             });
         }
         catch
         {
             _queuedFrozenEpoch = -1;
-            Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: true);
+            if (_pendingLeaveUpload.Count == 0)
+                return;
+            Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: true, reason: "disconnect");
         }
     }
 

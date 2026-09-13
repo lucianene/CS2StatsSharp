@@ -46,12 +46,14 @@ game/csgo/addons/counterstrikesharp/plugins/CS2SP/CS2SP.Logic.dll
 | `sp_api_round_address` | Full POST URL |
 | `sp_server_id` | `X-Server-Id` header (game_servers container name) |
 | `sp_match_id` | Query `match_id` |
-| `sp_dm_upload_interval` | Seconds between periodic stats uploads for every mod (min 1) |
+| `sp_dm_upload_interval` | Seconds between periodic stats uploads (default **30**, unchanged). Round / connect / leave POSTs reset this timer so they do not stack. The presence 1s/5s window is only for join coalescing. |
 | `sp_developer` | Dump payloads / damage events |
 
 `sp_send_stats` (server / RCON) forces an upload regardless of timer / round timing.
 
-A player who leaves mid-map stays in later POSTs with the score they had when they exited (SteamID-keyed snapshot). That row is only cleared on map change, after a last POST on map end.
+Joins, `player_connect_full`, `round_announce_warmup`, and the GameStart `round_end` (warmup commencing) share a **presence** POST (`match.reason=connect`, 1s settle, 5s min interval). That is what refreshes the web live list and “Playing DM / Aim / …” activity during warmup, before the first scored round. The API skips mission credit on `connect`. Connect payloads are the same event-total object as every other POST.
+
+A player who leaves is POSTed once (`match.reason=disconnect`, `left: true`) so mid-round kills land, then omitted from later heartbeats. The API stamps `left_at` so they drop off the live list immediately. Map-end still flushes remaining parked rows.
 
 String FakeConVars (`sp_mod`, `sp_game_mode`, `sp_api_round_address`, `sp_server_id`, `sp_match_id`) must have **nothing after the closing quote** on the cfg line. A trailing `// comment` is stored as part of the value and breaks the POST URL.
 

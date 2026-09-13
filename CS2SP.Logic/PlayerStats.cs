@@ -390,12 +390,21 @@ public sealed class PlayerStatsStore
         }
     }
 
-    public IEnumerable<PlayerStats> HumansForUpload()
+    /// <summary>
+    /// Humans for a heartbeat. Parked leavers are omitted so later POSTs stop
+    /// refreshing their live-list row. Pass <paramref name="includeDisconnected"/>
+    /// for the map-end flush (the one-shot leave POST adds pending leavers
+    /// separately so older parked rows are not re-sent).
+    /// </summary>
+    public IEnumerable<PlayerStats> HumansForUpload(bool includeDisconnected = false)
     {
         foreach (var s in _bySteam.Values)
         {
-            if (!s.IsBot && SteamIds.IsIndividual(s.SteamId))
-                yield return s;
+            if (s.IsBot || !SteamIds.IsIndividual(s.SteamId))
+                continue;
+            if (!includeDisconnected && s.Disconnected)
+                continue;
+            yield return s;
         }
     }
 

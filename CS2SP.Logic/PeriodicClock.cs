@@ -10,6 +10,12 @@ public sealed class PeriodicClock
 
     public void Reset() => LastFire = -1f;
 
+    /// <summary>
+    /// Treat a round / connect / leave POST as the periodic tick so the timer
+    /// does not stack another upload inside the same interval.
+    /// </summary>
+    public void NoteFire(float now) => LastFire = now;
+
     public bool TryFire(float now, float interval)
     {
         if (interval < 1f)
