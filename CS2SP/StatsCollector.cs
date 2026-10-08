@@ -17,6 +17,11 @@ public sealed class StatsCollector
     private int _uploadBusy;
     private volatile bool _stopped;
     private volatile bool _worldReady;
+    // OnMapEnd → next OnMapStart. CSS Server.CurrentTime dereferences gpGlobals
+    // with no null check and level shutdown frees it, so a read here segfaults
+    // srcds (try/catch never sees it). Use cached meta, never curtime / game
+    // rules, while this is set.
+    private volatile bool _levelDown;
     private bool _warnedMissingServerId;
     private string _lastMapName = "unknown";
     private int _lastRoundNumber;
@@ -60,6 +65,7 @@ public sealed class StatsCollector
 
     public void OnMapStart()
     {
+        _levelDown = false;
         _worldReady = false;
         _firstKillThisRound = false;
         _inWarmup = false;
@@ -80,6 +86,7 @@ public sealed class StatsCollector
 
     public void OnMapEnd()
     {
+        _levelDown = true;
         _worldReady = false;
         Clock.Reset();
         Presence.Reset();
@@ -93,6 +100,7 @@ public sealed class StatsCollector
 
     public void OnUnload()
     {
+        _levelDown = true;
         _queuedFrozenEpoch = -1;
         try
         {
@@ -570,7 +578,7 @@ public sealed class StatsCollector
 
     public void OnPeriodicTick()
     {
-        if (_stopped || !_cvars.Enabled.Value)
+        if (_stopped || _levelDown || !_cvars.Enabled.Value)
             return;
 
         float now;
@@ -645,7 +653,8 @@ public sealed class StatsCollector
     /// </summary>
     public void RequestPresenceUpload()
     {
-        if (_stopped || !_cvars.Enabled.Value)
+        // OnMapStart resets Presence and TrySeedWorld re-requests it.
+        if (_stopped || _levelDown || !_cvars.Enabled.Value)
             return;
         try
         {
@@ -745,7 +754,7 @@ public sealed class StatsCollector
         var roundNumber = _lastRoundNumber;
         var maxRounds = _lastMaxRounds;
         var mapName = _lastMapName;
-        if (refreshMeta)
+        if (refreshMeta && !_levelDown)
             RefreshMatchMeta(ref roundNumber, ref maxRounds, ref mapName);
 
         if (string.IsNullOrEmpty(mapName))
@@ -883,6 +892,9 @@ public sealed class StatsCollector
 
     private void NoteClocks()
     {
+        // Map-end POST: OnMapEnd already reset both clocks.
+        if (_levelDown)
+            return;
         try
         {
             var now = Server.CurrentTime;
