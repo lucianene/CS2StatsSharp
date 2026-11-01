@@ -22,7 +22,7 @@ public sealed partial class CS2SPPlugin : BasePlugin
         Api = new PlaycupApiClient(Logger);
         Stats = new StatsCollector(this, Cvars, Api, Logger);
 
-        RegisterListener<Listeners.OnMapStart>(_ => SafeRun("OnMapStart", Stats.OnMapStart));
+        RegisterListener<Listeners.OnMapStart>(map => SafeRun("OnMapStart", () => Stats.OnMapStart(map)));
         RegisterListener<Listeners.OnMapEnd>(() => SafeRun("OnMapEnd", Stats.OnMapEnd));
         RegisterListener<Listeners.OnClientConnected>(slot => SafeRun("OnClientConnected", () => Stats.OnClientConnected(slot)));
         RegisterListener<Listeners.OnClientPutInServer>(slot => SafeRun("OnClientPutInServer", () => Stats.OnClientPutInServer(slot)));
@@ -82,6 +82,14 @@ public sealed partial class CS2SPPlugin : BasePlugin
     [GameEventHandler]
     public HookResult OnRoundAnnounceWarmup(EventRoundAnnounceWarmup _, GameEventInfo _info) =>
         Safe("round_announce_warmup", Stats.OnRoundAnnounceWarmup);
+
+    [GameEventHandler]
+    public HookResult OnCsIntermission(EventCsIntermission _, GameEventInfo _info) =>
+        Safe("cs_intermission", Stats.OnIntermission);
+
+    [GameEventHandler]
+    public HookResult OnNextLevelChanged(EventNextlevelChanged ev, GameEventInfo _info) =>
+        Safe("nextlevel_changed", () => Stats.OnNextLevelChanged(ev.Nextlevel));
 
     [GameEventHandler]
     public HookResult OnWarmupEnd(EventWarmupEnd _, GameEventInfo _info) =>

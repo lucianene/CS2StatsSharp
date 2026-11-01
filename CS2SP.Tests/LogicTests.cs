@@ -546,6 +546,52 @@ public class ScoreboardMergeTests
         Assert.Equal(expected, ScoreboardMerge.MergeScoreboard(dest, src));
 }
 
+public class MapClockTests
+{
+    [Fact]
+    public void No_timelimit_has_no_countdown() =>
+        Assert.Null(MapClock.TimeleftSeconds(0, 10, 40));
+
+    [Fact]
+    public void Warmup_before_game_start_has_no_countdown() =>
+        Assert.Null(MapClock.TimeleftSeconds(20, 100, 40));
+
+    [Fact]
+    public void Timeleft_counts_down_from_the_timelimit() =>
+        Assert.Equal(1140, MapClock.TimeleftSeconds(20, 100, 160));
+
+    [Fact]
+    public void Timeleft_does_not_go_negative() =>
+        Assert.Equal(0, MapClock.TimeleftSeconds(1, 0.1f, 500));
+
+    [Fact]
+    public void Full_map_seconds_is_the_timelimit() =>
+        Assert.Equal(1200, MapClock.FullMapSeconds(20));
+}
+
+public class MapNamesTests
+{
+    [Fact]
+    public void Workshop_prefix_is_stripped() =>
+        Assert.Equal("aim_redline", MapNames.Normalize("workshop/3131775712/aim_redline"));
+
+    [Fact]
+    public void Same_map_is_not_a_next_map() =>
+        Assert.Null(MapNames.NextMap("de_dust2", "de_dust2"));
+
+    [Fact]
+    public void Next_map_keeps_a_different_level() =>
+        Assert.Equal("de_inferno", MapNames.NextMap(" de_inferno ", "de_dust2"));
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("0")]
+    [InlineData("none")]
+    [InlineData("undefined")]
+    public void Placeholder_next_maps_are_dropped(string raw) =>
+        Assert.Null(MapNames.NextMap(raw, "de_dust2"));
+}
+
 public class StatsPayloadTests
 {
     [Fact]
@@ -679,6 +725,47 @@ public class StatsPayloadTests
         Assert.False(row["round_win"]!.GetValue<bool>());
         Assert.Equal(400, row["total_damage"]!.GetValue<int>());
         Assert.False(row.ContainsKey("left"));
+    }
+
+    [Fact]
+    public void Empty_map_phase_still_posts_meta()
+    {
+        var body = StatsPayload.Build(
+            [],
+            "de_inferno",
+            12,
+            "map_changed",
+            round: 0,
+            timeleft: 1200,
+            allowEmpty: true);
+
+        Assert.NotNull(body);
+        Assert.Empty(body!["stats"]!.AsObject());
+        Assert.Equal("de_inferno", body["match"]!["map"]!.GetValue<string>());
+        Assert.Equal("map_changed", body["match"]!["reason"]!.GetValue<string>());
+        Assert.Equal(0, body["match"]!["round"]!.GetValue<int>());
+        Assert.Equal(1200, body["match"]!["timeleft"]!.GetValue<int>());
+        Assert.False(body["match"]!["changing"]!.GetValue<bool>());
+        Assert.False(body["match"]!.AsObject().ContainsKey("next_map"));
+    }
+
+    [Fact]
+    public void Map_changing_includes_the_next_map()
+    {
+        var body = StatsPayload.Build(
+            [],
+            "de_dust2",
+            12,
+            "map_changing",
+            round: 11,
+            timeleft: 8,
+            nextMap: "de_inferno",
+            changing: true,
+            allowEmpty: true);
+
+        Assert.Equal("de_inferno", body!["match"]!["next_map"]!.GetValue<string>());
+        Assert.True(body["match"]!["changing"]!.GetValue<bool>());
+        Assert.Equal(11, body["match"]!["round"]!.GetValue<int>());
     }
 
     [Fact]

@@ -55,7 +55,16 @@ Joins, `player_connect_full`, `round_announce_warmup`, and the GameStart `round_
 
 Warmup is not scored. Kills/damage/utility during `WarmupPeriod` are ignored, and live totals are wiped on `warmup_end` / GameStart so they cannot stack into the match row. Periodic and round POSTs wait until warmup ends. Leave POSTs still run (live list).
 
-A player who leaves is POSTed once (`match.reason=disconnect`, `left: true`) so mid-round kills land, then omitted from later heartbeats. The API stamps `left_at` so they drop off the live list immediately. Map-end still flushes remaining parked rows.
+A player who leaves is POSTed once (`match.reason=disconnect`, `left: true`) so mid-round kills land, then omitted from later heartbeats. The API stamps `left_at` so they drop off the live list immediately. Map-end still flushes remaining parked rows (`reason=map`, previous map). That flush does not move the live map.
+
+Map changes also POST with an empty `stats` object so the site can update while the server is empty:
+
+| `match.reason` | When | Live map |
+|---|---|---|
+| `map_changing` | Intermission, `nextlevel` during intermission, and `OnMapEnd` | Current map, `changing: true`, `next_map` when the engine has one |
+| `map_changed` | `OnMapStart` | The new map, `changing: false`, round 0, full `mp_timelimit` |
+
+Every upload includes `match.round` and, once the match clock is running, `match.timeleft` (seconds). The API broadcasts those on `live_meta`.
 
 String FakeConVars (`sp_mod`, `sp_game_mode`, `sp_api_round_address`, `sp_server_id`, `sp_match_id`) must have **nothing after the closing quote** on the cfg line. A trailing `// comment` is stored as part of the value and breaks the POST URL.
 

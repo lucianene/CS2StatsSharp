@@ -25,24 +25,37 @@ public static class StatsPayload
         IReadOnlyList<PlayerUpload> players,
         string mapName,
         int maxRounds,
-        string reason = "")
+        string reason = "",
+        int round = 0,
+        int? timeleft = null,
+        string? nextMap = null,
+        bool changing = false,
+        bool allowEmpty = false)
     {
-        if (players.Count == 0)
+        if (players.Count == 0 && !allowEmpty)
             return null;
 
         var statsObj = new JsonObject();
         foreach (var p in players)
             statsObj[p.SteamId] = ToPlayerObject(p);
 
+        var match = new JsonObject
+        {
+            ["map"] = mapName,
+            ["max_rounds"] = maxRounds,
+            ["round"] = round,
+            ["reason"] = reason ?? "",
+            ["changing"] = changing
+        };
+        if (timeleft is int left)
+            match["timeleft"] = left;
+        if (!string.IsNullOrEmpty(nextMap))
+            match["next_map"] = nextMap;
+
         return new JsonObject
         {
             ["stats"] = statsObj,
-            ["match"] = new JsonObject
-            {
-                ["map"] = mapName,
-                ["max_rounds"] = maxRounds,
-                ["reason"] = reason ?? ""
-            },
+            ["match"] = match,
             ["game"] = Game
         };
     }

@@ -1,5 +1,6 @@
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
+using CounterStrikeSharp.API.Modules.Cvars;
 using CounterStrikeSharp.API.Modules.Timers;
 using CS2SP.Logic;
 using Microsoft.Extensions.Logging;
@@ -26,6 +27,9 @@ public sealed class StatsCollector
     private string _lastMapName = "unknown";
     private int _lastRoundNumber;
     private int _lastMaxRounds;
+    private int? _lastTimeleft;
+    private string? _pendingNextMap;
+    private bool _intermission;
     private int _storeEpoch;
     private int _queuedFrozenEpoch = -1;
     private bool _inWarmup;
@@ -63,9 +67,10 @@ public sealed class StatsCollector
         }
     }
 
-    public void OnMapStart()
+    public void OnMapStart(string? mapName = null)
     {
         _levelDown = false;
+        _intermission = false;
         _worldReady = false;
         _firstKillThisRound = false;
         _inWarmup = false;
@@ -73,8 +78,16 @@ public sealed class StatsCollector
         _queuedFrozenEpoch = -1;
         // If OnMapEnd was skipped, POST last map's parked rows with the cached
         // map name before wiping. Duplicate of OnMapEnd is idempotent.
+        // This flush does not move the live map (reason=map).
         Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: false, reason: "map");
         _pendingLeaveUpload.Clear();
+        var loaded = MapNames.Normalize(mapName);
+        if (loaded.Length > 0)
+            _lastMapName = loaded;
+        _lastRoundNumber = 0;
+        _pendingNextMap = null;
+        _lastTimeleft = MapClock.FullMapSeconds(EngineCvars.GetFloat("mp_timelimit", 0));
+        PostMapPhase(changing: false);
         Clock.Reset();
         Presence.Reset();
         _storeEpoch++;
@@ -86,7 +99,11 @@ public sealed class StatsCollector
 
     public void OnMapEnd()
     {
+        // Read nextlevel before the level is marked down. CurrentTime is
+        // unsafe for the rest of this call.
+        _pendingNextMap = ReadNextMap(_lastMapName);
         _levelDown = true;
+        _intermission = false;
         _worldReady = false;
         Clock.Reset();
         Presence.Reset();
@@ -95,7 +112,38 @@ public sealed class StatsCollector
         // map/round so a leaver is not labeled as the next map, then OnMapStart
         // can Clear.
         Upload(winner: -1, requireWorld: false, captureLive: false, refreshMeta: false, reason: "map");
+        PostMapPhase(changing: true);
         _pendingLeaveUpload.Clear();
+    }
+
+    /// <summary>
+    /// Match is ending and the level is still up, so this post can carry the
+    /// live roster, round, and time left plus the next map when one is known.
+    /// </summary>
+    public void OnIntermission()
+    {
+        if (_stopped || _levelDown)
+            return;
+        _intermission = true;
+        var roundNumber = _lastRoundNumber;
+        var maxRounds = _lastMaxRounds;
+        var mapName = _lastMapName;
+        RefreshMatchMeta(ref roundNumber, ref maxRounds, ref mapName);
+        _pendingNextMap = ReadNextMap(mapName);
+        PostMapPhase(changing: true);
+    }
+
+    /// <summary>
+    /// Cache the engine's next map. Broadcast only during intermission so a
+    /// nextlevel set at map start does not mark the whole map as changing.
+    /// </summary>
+    public void OnNextLevelChanged(string? nextLevel)
+    {
+        if (_stopped || _levelDown)
+            return;
+        _pendingNextMap = MapNames.NextMap(nextLevel, _lastMapName);
+        if (_intermission)
+            PostMapPhase(changing: true);
     }
 
     public void OnUnload()
@@ -693,7 +741,16 @@ public sealed class StatsCollector
         _inWarmup = warmup;
     }
 
-    private void Upload(int winner, bool requireWorld = true, bool captureLive = true, bool refreshMeta = true, string reason = "")
+    private void PostMapPhase(bool changing) =>
+        Upload(
+            winner: -1,
+            requireWorld: false,
+            captureLive: false,
+            refreshMeta: false,
+            reason: changing ? "map_changing" : "map_changed",
+            mapPhase: true);
+
+    private void Upload(int winner, bool requireWorld = true, bool captureLive = true, bool refreshMeta = true, string reason = "", bool mapPhase = false)
     {
         if (_stopped)
             return;
@@ -718,7 +775,7 @@ public sealed class StatsCollector
         var sent = false;
         try
         {
-            sent = TryPost(winner, captureLive, refreshMeta, releaseBusy: tookBusy, reason);
+            sent = TryPost(winner, captureLive, refreshMeta, releaseBusy: tookBusy, reason, mapPhase);
         }
         catch (NativeException)
         {
@@ -736,7 +793,7 @@ public sealed class StatsCollector
         }
     }
 
-    private bool TryPost(int winner, bool captureLive, bool refreshMeta, bool releaseBusy, string reason)
+    private bool TryPost(int winner, bool captureLive, bool refreshMeta, bool releaseBusy, string reason, bool mapPhase = false)
     {
         var apiAddress = _cvars.ApiAddressText;
         if (!UploadUrl.IsConfigured(apiAddress))
@@ -791,8 +848,14 @@ public sealed class StatsCollector
 
         // Round / periodic / connect can overlap a leave. Drop anyone who parked
         // after the snapshot so a stale body without `left` cannot clear left_at.
+        // map_changing is a live snapshot of who is still on the server.
         if (reason is not "disconnect" and not "map")
             uploads.RemoveAll(u => u.Stats.Disconnected);
+
+        // The new map has not scored yet. An empty body still updates live
+        // meta; copying the previous roster would label those kills as the new map.
+        if (reason == "map_changed")
+            uploads.Clear();
 
         if (reason == "disconnect")
         {
@@ -814,7 +877,17 @@ public sealed class StatsCollector
             }
         }
 
-        var body = StatsPayload.Build(uploads, mapName, maxRounds, reason);
+        var changing = mapPhase && reason == "map_changing";
+        var body = StatsPayload.Build(
+            uploads,
+            mapName,
+            maxRounds,
+            reason,
+            roundNumber,
+            _lastTimeleft,
+            changing ? _pendingNextMap : null,
+            changing,
+            allowEmpty: mapPhase);
         if (body is null)
             return false;
 
@@ -838,10 +911,11 @@ public sealed class StatsCollector
         }
 
         _log.LogInformation(
-            "[CS2SP] Sending stats for {Count} player(s) (mod={Mod}, map={Map}, round={Round}, reason={Reason})",
+            "[CS2SP] Sending stats for {Count} player(s) (mod={Mod}, map={Map}, next={Next}, round={Round}, reason={Reason})",
             uploads.Count,
             string.IsNullOrEmpty(mod) ? "?" : mod,
             mapName,
+            changing && !string.IsNullOrEmpty(_pendingNextMap) ? _pendingNextMap : "-",
             roundNumber,
             string.IsNullOrEmpty(reason) ? "?" : reason);
 
@@ -920,8 +994,10 @@ public sealed class StatsCollector
             }
 
             maxRounds = EngineCvars.GetInt("mp_maxrounds", maxRounds);
-            if (!string.IsNullOrEmpty(Server.MapName))
-                mapName = Server.MapName;
+            var normalized = MapNames.Normalize(Server.MapName);
+            if (normalized.Length > 0)
+                mapName = normalized;
+            _lastTimeleft = ReadTimeleft();
         }
         catch (NativeException)
         {
@@ -931,6 +1007,61 @@ public sealed class StatsCollector
         _lastMaxRounds = maxRounds;
         _lastMapName = string.IsNullOrEmpty(mapName) ? "unknown" : mapName;
         mapName = _lastMapName;
+    }
+
+    private int? ReadTimeleft()
+    {
+        if (_levelDown)
+            return _lastTimeleft;
+        float start = 0;
+        float now = 0;
+        var haveStart = false;
+        var haveNow = false;
+        try
+        {
+            var rules = Players.GameRules();
+            if (rules is not null)
+            {
+                try
+                {
+                    start = rules.GameStartTime;
+                    haveStart = true;
+                }
+                catch (NativeException)
+                {
+                }
+            }
+        }
+        catch (NativeException)
+        {
+        }
+
+        try
+        {
+            now = Server.CurrentTime;
+            haveNow = true;
+        }
+        catch
+        {
+        }
+
+        if (!haveStart || !haveNow)
+            return _lastTimeleft;
+        return MapClock.TimeleftSeconds(EngineCvars.GetFloat("mp_timelimit", 0), start, now);
+    }
+
+    private string? ReadNextMap(string? current)
+    {
+        if (_levelDown)
+            return _pendingNextMap;
+        try
+        {
+            return MapNames.NextMap(ConVar.Find("nextlevel")?.StringValue, current);
+        }
+        catch
+        {
+            return _pendingNextMap;
+        }
     }
 
     private void CaptureLiveHumans()

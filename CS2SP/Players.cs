@@ -1,3 +1,4 @@
+using System.Globalization;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Cvars;
@@ -329,6 +330,27 @@ public static class EngineCvars
                 ConVarType.Int16 => cv.GetPrimitiveValue<short>(),
                 ConVarType.Float32 => (int)cv.GetPrimitiveValue<float>(),
                 _ => int.TryParse(cv.StringValue, out var n) ? n : fallback
+            };
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
+
+    public static float GetFloat(string name, float fallback = 0)
+    {
+        var cv = ConVar.Find(name);
+        if (cv is null)
+            return fallback;
+        try
+        {
+            return cv.Type switch
+            {
+                ConVarType.Float32 => cv.GetPrimitiveValue<float>(),
+                ConVarType.Int32 => cv.GetPrimitiveValue<int>(),
+                ConVarType.Int16 => cv.GetPrimitiveValue<short>(),
+                _ => float.TryParse(cv.StringValue, NumberStyles.Float, CultureInfo.InvariantCulture, out var n) ? n : fallback
             };
         }
         catch
