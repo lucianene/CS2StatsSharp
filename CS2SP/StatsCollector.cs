@@ -30,6 +30,9 @@ public sealed class StatsCollector
     private int? _lastTimeleft;
     private string? _pendingNextMap;
     private bool _intermission;
+    private string _mapSession = "";
+    private int _ctRoundWins;
+    private int _tRoundWins;
     private int _storeEpoch;
     private int _queuedFrozenEpoch = -1;
     private bool _inWarmup;
@@ -87,6 +90,7 @@ public sealed class StatsCollector
         _lastRoundNumber = 0;
         _pendingNextMap = null;
         _lastTimeleft = MapClock.FullMapSeconds(EngineCvars.GetFloat("mp_timelimit", 0));
+        RotateMapSession(_lastMapName);
         PostMapPhase(changing: false);
         Clock.Reset();
         Presence.Reset();
@@ -621,7 +625,52 @@ public sealed class StatsCollector
         DiscardWarmupScoreboard();
         if (Players.InWarmup())
             return;
+        NoteRoundWin(ev.Winner);
         Upload(ev.Winner, reason: "round");
+    }
+
+    private void NoteRoundWin(int winner)
+    {
+        if (winner == 3)
+            _ctRoundWins++;
+        else if (winner == 2)
+            _tRoundWins++;
+        else
+            return;
+
+        foreach (var stats in Store.HumansForUpload())
+        {
+            if (!stats.Disconnected && stats.Team == winner)
+                stats.RoundsWon++;
+        }
+    }
+
+    private bool TeamWonMap(int team)
+    {
+        if (team == 3)
+            return _ctRoundWins > _tRoundWins;
+        if (team == 2)
+            return _tRoundWins > _ctRoundWins;
+        return false;
+    }
+
+    private string ActiveSessionId()
+    {
+        var configured = _cvars.MatchIdText;
+        if (!string.IsNullOrEmpty(configured))
+            return configured;
+        if (string.IsNullOrEmpty(_mapSession))
+            _mapSession = MapSession.ForMap(_lastMapName, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        return _mapSession;
+    }
+
+    private void RotateMapSession(string mapName)
+    {
+        if (!string.IsNullOrEmpty(_cvars.MatchIdText))
+            return;
+        _ctRoundWins = 0;
+        _tRoundWins = 0;
+        _mapSession = MapSession.ForMap(mapName, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     }
 
     public void OnPeriodicTick()
@@ -820,7 +869,7 @@ public sealed class StatsCollector
         if (captureLive)
             CaptureLiveHumans();
 
-        var matchId = _cvars.MatchIdText;
+        var matchId = ActiveSessionId();
         var gameMode = _cvars.GameModeText;
         var mod = _cvars.ModText;
 
@@ -831,6 +880,7 @@ public sealed class StatsCollector
             var key = StatsPayload.SteamKey(stats.SteamId);
             if (!seen.Add(key))
                 continue;
+            var closingMap = reason == "map";
             uploads.Add(new PlayerUpload
             {
                 SteamId = key,
@@ -842,7 +892,10 @@ public sealed class StatsCollector
                 Assists = stats.Assists,
                 TotalDamage = stats.Damage,
                 Money = stats.Money,
-                Left = stats.Disconnected
+                Left = stats.Disconnected,
+                RoundsWon = stats.RoundsWon,
+                IncludeMapResult = closingMap,
+                MapWon = closingMap && !stats.Disconnected && TeamWonMap(stats.Team)
             });
         }
 
@@ -887,7 +940,8 @@ public sealed class StatsCollector
             _lastTimeleft,
             changing ? _pendingNextMap : null,
             changing,
-            allowEmpty: mapPhase);
+            allowEmpty: mapPhase,
+            ended: reason == "map" && uploads.Count > 0);
         if (body is null)
             return false;
 

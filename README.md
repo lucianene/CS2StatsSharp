@@ -57,6 +57,8 @@ Warmup is not scored. Kills/damage/utility during `WarmupPeriod` are ignored, an
 
 A player who leaves is POSTed once (`match.reason=disconnect`, `left: true`) so mid-round kills land, then omitted from later heartbeats. The API stamps `left_at` so they drop off the live list immediately. Map-end still flushes remaining parked rows (`reason=map`, previous map). That flush does not move the live map.
 
+When `sp_match_id` is empty, each map gets its own session id (`{map}_{unix}`). The next map no longer overwrites the finished map's row. The map-end POST (`reason=map`, `match.ended=true`) sets `map_won` for players still on the side that won more rounds, and sends each player's `rounds_won`.
+
 Map changes also POST with an empty `stats` object so the site can update while the server is empty:
 
 | `match.reason` | When | Live map |

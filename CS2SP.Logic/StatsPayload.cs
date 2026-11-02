@@ -15,6 +15,10 @@ public sealed class PlayerUpload
     public int TotalDamage { get; init; }
     public int Money { get; init; }
     public bool Left { get; init; }
+    public int RoundsWon { get; init; }
+    /// <summary>Map-end post. Losers are explicit false so a tie does not keep a stale win.</summary>
+    public bool IncludeMapResult { get; init; }
+    public bool MapWon { get; init; }
 }
 
 public static class StatsPayload
@@ -30,7 +34,8 @@ public static class StatsPayload
         int? timeleft = null,
         string? nextMap = null,
         bool changing = false,
-        bool allowEmpty = false)
+        bool allowEmpty = false,
+        bool ended = false)
     {
         if (players.Count == 0 && !allowEmpty)
             return null;
@@ -45,7 +50,8 @@ public static class StatsPayload
             ["max_rounds"] = maxRounds,
             ["round"] = round,
             ["reason"] = reason ?? "",
-            ["changing"] = changing
+            ["changing"] = changing,
+            ["ended"] = ended
         };
         if (timeleft is int left)
             match["timeleft"] = left;
@@ -70,6 +76,7 @@ public static class StatsPayload
             ["name"] = p.Name,
             ["round"] = round,
             ["round_win"] = p.RoundWin,
+            ["rounds_won"] = p.RoundsWon,
             ["kills"] = s.Kills,
             ["team_kills"] = s.TeamKills,
             ["assists"] = p.Assists,
@@ -129,6 +136,8 @@ public static class StatsPayload
         };
         if (p.Left)
             obj["left"] = true;
+        if (p.IncludeMapResult)
+            obj["map_won"] = p.MapWon;
         return obj;
     }
 

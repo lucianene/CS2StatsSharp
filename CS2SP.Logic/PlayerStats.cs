@@ -65,6 +65,7 @@ public sealed class PlayerStats
     public int TeamWipes;
     public float LongestKillDistance;
     public int Mvps;
+    public int RoundsWon;
     public int RoundKills;
     public bool DeadThisRound;
     public float FlashExpiry;
@@ -216,6 +217,7 @@ public sealed class PlayerStats
         TeamWipes = 0;
         LongestKillDistance = 0;
         Mvps = 0;
+        RoundsWon = 0;
         UniqueKills.Clear();
         ResetRound();
     }

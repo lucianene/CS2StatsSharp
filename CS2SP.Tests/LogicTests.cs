@@ -569,6 +569,17 @@ public class MapClockTests
         Assert.Equal(1200, MapClock.FullMapSeconds(20));
 }
 
+public class MapSessionTests
+{
+    [Fact]
+    public void Session_is_the_map_plus_the_start_time() =>
+        Assert.Equal("aim_redline_1788636714", MapSession.ForMap("workshop/3131775712/aim_redline", 1788636714));
+
+    [Fact]
+    public void Empty_map_still_gets_a_session() =>
+        Assert.Equal("unknown_0", MapSession.ForMap("  ", -1));
+}
+
 public class MapNamesTests
 {
     [Fact]
@@ -747,6 +758,29 @@ public class StatsPayloadTests
         Assert.Equal(1200, body["match"]!["timeleft"]!.GetValue<int>());
         Assert.False(body["match"]!["changing"]!.GetValue<bool>());
         Assert.False(body["match"]!.AsObject().ContainsKey("next_map"));
+        Assert.False(body["match"]!["ended"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void Map_end_marks_the_winner_and_keeps_round_wins()
+    {
+        var body = StatsPayload.Build(
+        [
+            new PlayerUpload
+            {
+                SteamId = "76561198000000001",
+                Team = 3,
+                Stats = new PlayerStats(),
+                RoundsWon = 7,
+                IncludeMapResult = true,
+                MapWon = true
+            }
+        ], "aim_redline", 12, "map", round: 12, ended: true);
+
+        var row = body!["stats"]!["76561198000000001"]!;
+        Assert.True(body["match"]!["ended"]!.GetValue<bool>());
+        Assert.Equal(7, row["rounds_won"]!.GetValue<int>());
+        Assert.True(row["map_won"]!.GetValue<bool>());
     }
 
     [Fact]
