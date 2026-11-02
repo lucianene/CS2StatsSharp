@@ -8,7 +8,7 @@ namespace CS2SP;
 public sealed partial class CS2SPPlugin : BasePlugin
 {
     public override string ModuleName => "CS2StatsPlugin";
-    public override string ModuleVersion => "1.0.0";
+    public override string ModuleVersion => "1.0.2";
     public override string ModuleAuthor => "playcup";
     public override string ModuleDescription => "Collects and uploads per-round player stats for any CS2 game mode";
 

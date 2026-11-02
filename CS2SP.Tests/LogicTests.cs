@@ -762,6 +762,26 @@ public class StatsPayloadTests
     }
 
     [Fact]
+    public void Map_win_keeps_connected_winners_and_falls_back_when_everyone_dropped()
+    {
+        var ct = new PlayerStats { SteamId = 76561198000000001UL, Team = MapWinRoster.TeamCt };
+        var t = new PlayerStats { SteamId = 76561198000000002UL, Team = MapWinRoster.TeamT, Disconnected = true };
+        var live = MapWinRoster.Winners(8, 4, [ct], [ct, t]);
+        Assert.Equal(["76561198000000001"], live.OrderBy(s => s).ToArray());
+
+        var dropped = new PlayerStats { SteamId = 76561198000000001UL, Team = MapWinRoster.TeamCt, Disconnected = true };
+        var afterChangelevel = MapWinRoster.Winners(8, 4, [], [dropped, t]);
+        Assert.Equal(["76561198000000001"], afterChangelevel.OrderBy(s => s).ToArray());
+
+        var loserStillHere = new PlayerStats { SteamId = 76561198000000002UL, Team = MapWinRoster.TeamT };
+        var winnerAlreadyGone = MapWinRoster.Winners(8, 4, [loserStillHere], [dropped, loserStillHere]);
+        Assert.Equal(["76561198000000001"], winnerAlreadyGone.OrderBy(s => s).ToArray());
+
+        var tie = MapWinRoster.Winners(6, 6, [ct], [ct, t]);
+        Assert.Empty(tie);
+    }
+
+    [Fact]
     public void Map_end_marks_the_winner_and_keeps_round_wins()
     {
         var body = StatsPayload.Build(

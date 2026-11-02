@@ -33,6 +33,10 @@ public sealed class StatsCollector
     private string _mapSession = "";
     private int _ctRoundWins;
     private int _tRoundWins;
+    // Frozen on the first map-end flush. OnMapStart posts again after the
+    // engine has already disconnected everyone; recomputing there would
+    // store map_won=false over the win.
+    private HashSet<string>? _mapWinSteam;
     private int _storeEpoch;
     private int _queuedFrozenEpoch = -1;
     private bool _inWarmup;
@@ -645,13 +649,15 @@ public sealed class StatsCollector
         }
     }
 
-    private bool TeamWonMap(int team)
+    private void FreezeMapWins()
     {
-        if (team == 3)
-            return _ctRoundWins > _tRoundWins;
-        if (team == 2)
-            return _tRoundWins > _ctRoundWins;
-        return false;
+        if (_mapWinSteam != null)
+            return;
+        _mapWinSteam = MapWinRoster.Winners(
+            _ctRoundWins,
+            _tRoundWins,
+            Store.HumansForUpload(),
+            Store.HumansForUpload(includeDisconnected: true));
     }
 
     private string ActiveSessionId()
@@ -666,6 +672,7 @@ public sealed class StatsCollector
 
     private void RotateMapSession(string mapName)
     {
+        _mapWinSteam = null;
         if (!string.IsNullOrEmpty(_cvars.MatchIdText))
             return;
         _ctRoundWins = 0;
@@ -881,6 +888,8 @@ public sealed class StatsCollector
             if (!seen.Add(key))
                 continue;
             var closingMap = reason == "map";
+            if (closingMap)
+                FreezeMapWins();
             uploads.Add(new PlayerUpload
             {
                 SteamId = key,
@@ -895,7 +904,7 @@ public sealed class StatsCollector
                 Left = stats.Disconnected,
                 RoundsWon = stats.RoundsWon,
                 IncludeMapResult = closingMap,
-                MapWon = closingMap && !stats.Disconnected && TeamWonMap(stats.Team)
+                MapWon = closingMap && _mapWinSteam!.Contains(key)
             });
         }
 
