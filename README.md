@@ -43,7 +43,7 @@ game/csgo/addons/counterstrikesharp/plugins/CS2SP/CS2SP.Logic.dll
 | `sp_enabled` | Master switch |
 | `sp_mod` | Scoring profile (`matchmaking`, `deathmatch`, `aim`, …). Uploads are not gated on this. |
 | `sp_game_mode` | Free-text label in the query string |
-| `sp_api_round_address` | Full POST URL |
+| `sp_api_round_address` | Full POST URL. No built-in default — `server.cfg` sets it. The first map post waits up to 8s for that exec so a boot POST cannot use a leftover host. |
 | `sp_server_id` | `X-Server-Id` header (game_servers container name) |
 | `sp_match_id` | Query `match_id` |
 | `sp_dm_upload_interval` | Seconds between periodic stats uploads (default **30**, unchanged). Round / connect / leave POSTs reset this timer so they do not stack. The presence 1s/5s window is only for join coalescing. |

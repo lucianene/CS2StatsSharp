@@ -24,6 +24,10 @@ public sealed class StatsCollector
     // rules, while this is set.
     private volatile bool _levelDown;
     private bool _warnedMissingServerId;
+    private bool _loggedUnconfigured;
+    // server.cfg is exec'd a couple of seconds after the plugin's first map
+    // start. Retry the empty-server map post until that URL is in place.
+    private int _addressWait;
     private string _lastMapName = "unknown";
     private int _lastRoundNumber;
     private int _lastMaxRounds;
@@ -854,9 +858,30 @@ public sealed class StatsCollector
         var apiAddress = _cvars.ApiAddressText;
         if (!UploadUrl.IsConfigured(apiAddress))
         {
-            _log.LogInformation("[CS2SP] Skipping stats upload: sp_api_round_address is empty (set it in server.cfg).");
+            if (mapPhase && _addressWait < 8)
+            {
+                _addressWait++;
+                var changing = reason == "map_changing";
+                _plugin.AddTimer(1.0f, () =>
+                {
+                    if (!_stopped)
+                        PostMapPhase(changing);
+                });
+                return false;
+            }
+
+            // The pre-cfg map flush is not a map-phase post. Stay quiet until
+            // the retry window has elapsed so a late server.cfg still wins.
+            if (!_loggedUnconfigured && _addressWait >= 8)
+            {
+                _loggedUnconfigured = true;
+                _log.LogInformation("[CS2SP] Skipping stats upload: sp_api_round_address is empty (set it in server.cfg).");
+            }
+
             return false;
         }
+
+        _addressWait = 0;
 
         // Map-end clears pending then a queued NextWorldUpdate can still run.
         // An empty leave queue would POST only the remaining live roster as

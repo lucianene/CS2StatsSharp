@@ -12,7 +12,9 @@ public sealed class SpConVars
     public readonly FakeConVar<bool> Enabled = new("sp_enabled", "Enable CS2StatsPlugin stats collection", true);
     public readonly FakeConVar<bool> Developer = new("sp_developer", "Enable verbose debug logging", false);
     public readonly FakeConVar<string> MatchId = new("sp_match_id", "Match / session ID sent with each stats payload", "");
-    public readonly FakeConVar<string> ApiAddress = new("sp_api_round_address", "Full URL for the mod stats endpoint", "https://api-test.playcup.ro/v1/mod-stats/");
+    // Empty until server.cfg. The first map post runs before that exec, and a
+    // baked-in host (api-test) would be contacted from production.
+    public readonly FakeConVar<string> ApiAddress = new("sp_api_round_address", "Full URL for the mod stats endpoint", "");
     public readonly FakeConVar<string> GameMode = new("sp_game_mode", "Game mode label (deathmatch, zombie, retake, …)", "deathmatch");
     public readonly FakeConVar<string> Mod = new("sp_mod", "Mod type driving stat behavior: matchmaking, deathmatch, retake, aim, zombie, …", "matchmaking");
     public readonly FakeConVar<string> ServerId = new("sp_server_id", "This server's identifier (game_servers.container_name) so the API buckets stats to the right server.", "");
