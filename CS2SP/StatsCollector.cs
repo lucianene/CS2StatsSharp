@@ -861,11 +861,10 @@ public sealed class StatsCollector
             if (mapPhase && _addressWait < 8)
             {
                 _addressWait++;
-                var changing = reason == "map_changing";
                 _plugin.AddTimer(1.0f, () =>
                 {
                     if (!_stopped)
-                        PostMapPhase(changing);
+                        PostMapPhase(reason == "map_changing");
                 });
                 return false;
             }
